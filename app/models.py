@@ -1,0 +1,73 @@
+from typing import List, Optional
+from pydantic import BaseModel, Field
+
+class Preferences(BaseModel):
+    theme: str = "system"
+
+class User(BaseModel):
+    id: str
+    email: str
+    name: str
+    avatarUrl: Optional[str] = None
+    preferences: Preferences
+
+    class Config:
+        json_schema_extra = {"example": {"id": "user-1", "email": "demo@intellex.ai", "name": "Demo Researcher"}}
+
+class LoginRequest(BaseModel):
+    email: str = Field(..., example="demo@intellex.ai")
+    name: Optional[str] = Field(None, example="Demo Researcher")
+
+class ResearchProject(BaseModel):
+    id: str
+    userId: str
+    title: str
+    goal: str
+    status: str
+    createdAt: int
+    updatedAt: int
+    lastMessageAt: Optional[int] = None
+
+class ResearchPlanItem(BaseModel):
+    id: str
+    title: str
+    description: str
+    status: str
+    subItems: Optional[List["ResearchPlanItem"]] = None
+
+ResearchPlanItem.model_rebuild()
+
+class ResearchPlan(BaseModel):
+    id: str
+    projectId: str
+    items: List[ResearchPlanItem]
+    updatedAt: int
+
+class AgentThought(BaseModel):
+    id: str
+    title: str
+    content: str
+    status: str
+    timestamp: int
+
+class ChatMessage(BaseModel):
+    id: str
+    projectId: str
+    senderId: str
+    senderType: str
+    content: str
+    thoughts: Optional[List[AgentThought]] = None
+    timestamp: int
+
+class CreateProjectRequest(BaseModel):
+    title: str
+    goal: str
+    userId: Optional[str] = None
+
+class CreateMessageRequest(BaseModel):
+    content: str
+
+class SendMessageResponse(BaseModel):
+    userMessage: ChatMessage
+    agentMessage: ChatMessage
+    plan: Optional[ResearchPlan] = None
