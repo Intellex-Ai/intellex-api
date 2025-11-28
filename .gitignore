@@ -1,1 +1,9 @@
 venv/
+app/data/
+*.db
+
+# Docker
+Dockerfile
+docker-compose.yml
+docker-compose.*.yml
+.dockerignore
