@@ -1,9 +1,13 @@
 import os
 import time
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.database import init_db
+
+from app.database import check_db_health, init_db
 from app.routers import auth, projects
+from app.storage import get_storage_mode
+from app.supabase_client import check_supabase_health
 
 APP_VERSION = "0.2.0"
 
@@ -31,7 +35,8 @@ app.include_router(projects.router)
 
 @app.on_event("startup")
 def on_startup():
-    init_db()
+    if get_storage_mode() == "sqlite":
+        init_db()
 
 @app.get("/")
 async def root():
@@ -43,4 +48,21 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "timestamp": now_ms()}
+    supabase = check_supabase_health()
+    return {
+        "status": "ok",
+        "timestamp": now_ms(),
+        "storage": get_storage_mode(),
+        "db": check_db_health() if get_storage_mode() == "sqlite" else {"status": "skipped", "reason": "Using Supabase storage"},
+        "supabase": supabase,
+    }
+
+@app.get("/health/db")
+async def db_health():
+    if get_storage_mode() != "sqlite":
+        return {"status": "skipped", "reason": "Using Supabase storage"}
+    return check_db_health()
+
+@app.get("/health/supabase")
+async def supabase_health():
+    return check_supabase_health()

@@ -9,6 +9,7 @@ def get_db() -> Generator[sqlite3.Connection, None, None]:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn
     finally:
@@ -18,6 +19,7 @@ def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
 
     conn.executescript(
         """
@@ -63,3 +65,38 @@ def init_db():
     )
     conn.commit()
     conn.close()
+
+def check_db_health() -> dict:
+    """
+    Return lightweight database health info: path, presence of core tables, and user count.
+    """
+    conn = None
+    try:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+
+        tables = {
+            row["name"]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        required_tables = {"users", "projects", "research_plans", "messages"}
+        missing = sorted(required_tables - tables)
+
+        user_count = None
+        if "users" in tables:
+            user_count = conn.execute("SELECT COUNT(*) as count FROM users").fetchone()["count"]
+
+        status = "ok" if not missing else "degraded"
+        return {
+            "status": status,
+            "path": str(DB_PATH),
+            "missingTables": missing,
+            "userCount": user_count,
+        }
+    except Exception as exc:  # pragma: no cover - simple runtime guard
+        return {"status": "error", "path": str(DB_PATH), "error": str(exc)}
+    finally:
+        if conn:
+            conn.close()

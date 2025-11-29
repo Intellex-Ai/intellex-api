@@ -1,45 +1,24 @@
-import uuid
-import json
-import sqlite3
-from fastapi import APIRouter, Depends, HTTPException
-from app.database import get_db
-from app.models import User, LoginRequest, Preferences
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from app.models import User, LoginRequest
+from app.storage import DataStore, get_store
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-def row_to_user(row: sqlite3.Row) -> User:
-    return User(
-        id=row["id"],
-        email=row["email"],
-        name=row["name"],
-        avatarUrl=row["avatar_url"],
-        preferences=json.loads(row["preferences"] or "{}"),
-    )
-
-def get_or_create_user(conn: sqlite3.Connection, email: str, name: str | None) -> User:
-    existing = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
-    if existing:
-        return row_to_user(existing)
-
-    new_id = f"user-{uuid.uuid4().hex[:8]}"
-    preferences = {"theme": "system"}
-    conn.execute(
-        """
-        INSERT INTO users (id, email, name, avatar_url, preferences)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (new_id, email, name or "Intellex User", None, json.dumps(preferences)),
-    )
-    conn.commit()
-    return User(id=new_id, email=email, name=name or "Intellex User", preferences=Preferences(**preferences))
-
 @router.post("/login", response_model=User)
-def login(payload: LoginRequest, conn: sqlite3.Connection = Depends(get_db)):
-    return get_or_create_user(conn, payload.email, payload.name)
+def login(payload: LoginRequest, store: DataStore = Depends(get_store)):
+    return store.get_or_create_user(payload.email, payload.name)
 
 @router.get("/me", response_model=User)
-def current_user(conn: sqlite3.Connection = Depends(get_db)):
-    row = conn.execute("SELECT * FROM users ORDER BY rowid ASC LIMIT 1").fetchone()
-    if not row:
+def current_user(
+    store: DataStore = Depends(get_store),
+    email: str | None = Query(None, description="Optional email to fetch a specific user"),
+):
+    user = None
+    if email:
+        user = store.find_user(email)
+    if not user:
+        user = store.get_first_user()
+    if not user:
         raise HTTPException(status_code=404, detail="No users found")
-    return row_to_user(row)
+    return user
