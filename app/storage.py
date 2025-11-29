@@ -189,7 +189,7 @@ class SQLiteStore:
             INSERT INTO users (id, email, name, avatar_url, preferences)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (new_id, email, name or "Intellex User", None, json.dumps(prefs.model_dump())),
+            (new_id, email, name or "Intellex User", None, json.dumps(prefs.model_dump(exclude_none=True))),
         )
         self.conn.commit()
         return User(id=new_id, email=email, name=name or "Intellex User", preferences=prefs, avatarUrl=None)
@@ -368,7 +368,7 @@ class SupabaseStore:
                     "email": email,
                     "name": name or "Intellex User",
                     "avatar_url": None,
-                    "preferences": prefs.model_dump(),
+                    "preferences": prefs.model_dump(exclude_none=True),
                 }
             )
             .select("*")

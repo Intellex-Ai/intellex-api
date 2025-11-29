@@ -3,6 +3,10 @@ from pydantic import BaseModel, Field
 
 class Preferences(BaseModel):
     theme: str = "system"
+    title: str | None = None
+    organization: str | None = None
+    location: str | None = None
+    bio: str | None = None
 
 class User(BaseModel):
     id: str
