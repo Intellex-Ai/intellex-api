@@ -7,7 +7,11 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.post("/login", response_model=User)
 def login(payload: LoginRequest, store: DataStore = Depends(get_store)):
-    return store.get_or_create_user(payload.email, payload.name)
+    try:
+        return store.get_or_create_user(payload.email, payload.name, payload.supabaseUserId)
+    except Exception as exc:
+        # Surface a clearer 500 for easier debugging in prod
+        raise HTTPException(status_code=500, detail=f"Auth storage error: {exc}")
 
 @router.get("/me", response_model=User)
 def current_user(

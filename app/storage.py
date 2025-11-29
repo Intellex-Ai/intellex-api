@@ -172,7 +172,7 @@ class SQLiteStore:
         self.conn.close()
 
     # User operations
-    def get_or_create_user(self, email: str, name: Optional[str]) -> User:
+    def get_or_create_user(self, email: str, name: Optional[str], supabase_user_id: Optional[str] = None) -> User:
         existing = self.conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
         if existing:
             # Update the display name if a new non-empty name is provided and differs.
@@ -182,7 +182,7 @@ class SQLiteStore:
                 existing = self.conn.execute("SELECT * FROM users WHERE id = ?", (existing["id"],)).fetchone()
             return to_user(dict(existing))
 
-        new_id = f"user-{uuid.uuid4().hex[:8]}"
+        new_id = supabase_user_id or f"user-{uuid.uuid4().hex[:8]}"
         prefs = Preferences()
         self.conn.execute(
             """
@@ -340,7 +340,7 @@ class SupabaseStore:
         return None
 
     # User operations
-    def get_or_create_user(self, email: str, name: Optional[str]) -> User:
+    def get_or_create_user(self, email: str, name: Optional[str], supabase_user_id: Optional[str] = None) -> User:
         existing = self.client.table("users").select("*").eq("email", email).limit(1).execute()
         if existing.data:
             user_row = existing.data[0]
@@ -358,7 +358,7 @@ class SupabaseStore:
                     user_row = updated.data
             return to_user(user_row)
 
-        new_id = f"user-{uuid.uuid4().hex[:8]}"
+        new_id = supabase_user_id or f"user-{uuid.uuid4().hex[:8]}"
         prefs = Preferences()
         inserted = (
             self.client.table("users")
@@ -528,12 +528,68 @@ def get_store() -> Generator[DataStore, None, None]:
     """
     client = get_supabase()
     if client:
-        yield SupabaseStore(client)
-        return
+        # Ensure required tables exist; otherwise fall back to SQLite to avoid 500s.
+        try:
+            probe = client.table("users").select("id").limit(1).execute()
+            if getattr(probe, "error", None):
+                raise RuntimeError(f"Supabase users table not ready: {probe.error}")
+            yield SupabaseStore(client)
+            return
+        except Exception:
+            # Supabase configured but tables not provisioned; continue to SQLite.
+            client = None
 
+    # Default to SQLite, ensuring schema exists.
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                email TEXT UNIQUE,
+                name TEXT,
+                avatar_url TEXT,
+                preferences TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS projects (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                title TEXT,
+                goal TEXT,
+                status TEXT,
+                created_at INTEGER,
+                updated_at INTEGER,
+                last_message_at INTEGER,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            );
+
+            CREATE TABLE IF NOT EXISTS research_plans (
+                id TEXT PRIMARY KEY,
+                project_id TEXT UNIQUE,
+                items TEXT,
+                updated_at INTEGER,
+                FOREIGN KEY (project_id) REFERENCES projects (id)
+            );
+
+            CREATE TABLE IF NOT EXISTS messages (
+                id TEXT PRIMARY KEY,
+                project_id TEXT,
+                sender_id TEXT,
+                sender_type TEXT,
+                content TEXT,
+                thoughts TEXT,
+                timestamp INTEGER,
+                FOREIGN KEY (project_id) REFERENCES projects (id)
+            );
+            """
+        )
+        conn.commit()
+    except Exception:
+        # If schema creation fails (e.g., readonly FS), continue; operations may still proceed if file exists.
+        pass
     store = SQLiteStore(conn)
     try:
         yield store

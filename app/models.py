@@ -17,6 +17,7 @@ class User(BaseModel):
 class LoginRequest(BaseModel):
     email: str = Field(..., example="demo@intellex.ai")
     name: Optional[str] = Field(None, example="Demo Researcher")
+    supabaseUserId: Optional[str] = Field(None, example="00000000-0000-0000-0000-000000000000")
 
 class ResearchProject(BaseModel):
     id: str

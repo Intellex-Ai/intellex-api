@@ -1,9 +1,11 @@
+import os
 import sqlite3
 from pathlib import Path
 from typing import Generator
 
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "data" / "intellex.db"
+# Default to /tmp in serverless (Vercel) to avoid read-only filesystem; allow override via env.
+DB_PATH = Path(os.getenv("DB_PATH", "/tmp/intellex.db"))
 
 def get_db() -> Generator[sqlite3.Connection, None, None]:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
