@@ -8,3 +8,4 @@ docker-compose.yml
 docker-compose.*.yml
 .dockerignore
 .vercel
+.env*.local
