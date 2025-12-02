@@ -1,11 +1,9 @@
-import time
 import uuid
 from typing import List, Tuple
+
 from app.services.llm import llm_service
 from app.models import ResearchProject
-
-def now_ms() -> int:
-    return int(time.time() * 1000)
+from app.utils.time import now_ms
 
 class AgentOrchestrator:
     def __init__(self):

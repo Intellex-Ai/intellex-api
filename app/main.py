@@ -1,5 +1,4 @@
 import os
-import time
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,11 +7,9 @@ from app.database import check_db_health, init_db
 from app.routers import auth, projects
 from app.storage import get_storage_mode
 from app.supabase_client import check_supabase_health
+from app.utils.time import now_ms
 
 APP_VERSION = "0.2.0"
-
-def now_ms() -> int:
-    return int(time.time() * 1000)
 
 app = FastAPI(
     title="Intellex API",

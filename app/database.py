@@ -7,22 +7,11 @@ BASE_DIR = Path(__file__).resolve().parent
 # Default to /tmp in serverless (Vercel) to avoid read-only filesystem; allow override via env.
 DB_PATH = Path(os.getenv("DB_PATH", "/tmp/intellex.db"))
 
-def get_db() -> Generator[sqlite3.Connection, None, None]:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        yield conn
-    finally:
-        conn.close()
-
-def init_db():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-
+def ensure_schema(conn: sqlite3.Connection) -> None:
+    """
+    Create core tables if they do not exist.
+    Kept idempotent so it can be called from multiple initialization paths.
+    """
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -65,6 +54,24 @@ def init_db():
         );
         """
     )
+
+def get_db() -> Generator[sqlite3.Connection, None, None]:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+def init_db():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+
+    ensure_schema(conn)
     conn.commit()
     conn.close()
 

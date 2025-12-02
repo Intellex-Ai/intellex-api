@@ -1,10 +1,9 @@
 import json
 import sqlite3
-import time
 import uuid
 from typing import Generator, Optional, Protocol, Sequence, Union
 
-from app.database import DB_PATH
+from app.database import DB_PATH, ensure_schema
 from app.models import (
     AgentThought,
     ChatMessage,
@@ -15,15 +14,12 @@ from app.models import (
     User,
 )
 from app.supabase_client import get_supabase
+from app.utils.time import now_ms
 
 try:
     from supabase import Client
 except ImportError:  # pragma: no cover - optional dependency path
     Client = None  # type: ignore
-
-
-def now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 def default_preferences(raw: Union[str, dict, Preferences, None] = None) -> Preferences:
@@ -150,7 +146,7 @@ def to_message(row: dict) -> ChatMessage:
 
 class DataStore(Protocol):
     def close(self) -> None: ...
-    def get_or_create_user(self, email: str, name: Optional[str]) -> User: ...
+    def get_or_create_user(self, email: str, name: Optional[str], supabase_user_id: Optional[str] = None) -> User: ...
     def find_user(self, identifier: str) -> Optional[User]: ...
     def get_first_user(self) -> Optional[User]: ...
     def list_projects(self, user_id: Optional[str]) -> list[ResearchProject]: ...
@@ -544,48 +540,7 @@ def get_store() -> Generator[DataStore, None, None]:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     try:
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id TEXT PRIMARY KEY,
-                email TEXT UNIQUE,
-                name TEXT,
-                avatar_url TEXT,
-                preferences TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS projects (
-                id TEXT PRIMARY KEY,
-                user_id TEXT,
-                title TEXT,
-                goal TEXT,
-                status TEXT,
-                created_at INTEGER,
-                updated_at INTEGER,
-                last_message_at INTEGER,
-                FOREIGN KEY (user_id) REFERENCES users (id)
-            );
-
-            CREATE TABLE IF NOT EXISTS research_plans (
-                id TEXT PRIMARY KEY,
-                project_id TEXT UNIQUE,
-                items TEXT,
-                updated_at INTEGER,
-                FOREIGN KEY (project_id) REFERENCES projects (id)
-            );
-
-            CREATE TABLE IF NOT EXISTS messages (
-                id TEXT PRIMARY KEY,
-                project_id TEXT,
-                sender_id TEXT,
-                sender_type TEXT,
-                content TEXT,
-                thoughts TEXT,
-                timestamp INTEGER,
-                FOREIGN KEY (project_id) REFERENCES projects (id)
-            );
-            """
-        )
+        ensure_schema(conn)
         conn.commit()
     except Exception:
         # If schema creation fails (e.g., readonly FS), continue; operations may still proceed if file exists.

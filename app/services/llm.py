@@ -4,13 +4,27 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 class LLMService:
     def __init__(self):
-        # We will assume OpenAI for now as per user preference
-        # API Key should be in env var OPENAI_API_KEY
-        self.llm = ChatOpenAI(
-            model="gpt-4-turbo-preview",
-            temperature=0.7,
-            api_key=os.getenv("OPENAI_API_KEY", "sk-placeholder") # Placeholder to prevent crash on init if missing
-        )
+        self.model = os.getenv("OPENAI_MODEL", "gpt-4-turbo-preview")
+        self.temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.7"))
+        self.api_key = os.getenv("OPENAI_API_KEY")
+        self.llm = self._build_client()
+
+    def _build_client(self) -> ChatOpenAI | None:
+        """
+        Lazily construct the LLM client only when a real API key is available.
+        Avoids noisy errors in environments where the key is intentionally absent.
+        """
+        if not self.api_key or "placeholder" in self.api_key:
+            return None
+        try:
+            return ChatOpenAI(
+                model=self.model,
+                temperature=self.temperature,
+                api_key=self.api_key,
+            )
+        except Exception as exc:  # pragma: no cover - defensive guard
+            print(f"LLM init error: {exc}")
+            return None
 
     async def generate_response(self, system_prompt: str, user_content: str) -> str:
         messages = [
@@ -18,6 +32,8 @@ class LLMService:
             HumanMessage(content=user_content)
         ]
         try:
+            if not self.llm:
+                return "I'm not connected to the model right now. Please check the OPENAI_API_KEY configuration."
             response = await self.llm.ainvoke(messages)
             return response.content
         except Exception as e:
