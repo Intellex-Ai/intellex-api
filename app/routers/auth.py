@@ -3,14 +3,23 @@ from starlette import status
 
 from app.models import User, LoginRequest, DeleteAccountRequest
 from app.storage import DataStore, get_store
-from app.supabase_client import get_supabase
+from app.supabase_client import get_supabase, fetch_auth_metadata
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.post("/login", response_model=User)
 def login(payload: LoginRequest, store: DataStore = Depends(get_store)):
     try:
-        return store.get_or_create_user(payload.email, payload.name, payload.supabaseUserId)
+        name = payload.name
+        # Seed name from auth metadata if not provided.
+        if not name and payload.supabaseUserId:
+            meta = fetch_auth_metadata(payload.supabaseUserId) or {}
+            name = (
+                meta.get("display_name")
+                or meta.get("full_name")
+                or meta.get("name")
+            )
+        return store.get_or_create_user(payload.email, name, payload.supabaseUserId)
     except Exception as exc:
         # Surface a clearer 500 for easier debugging in prod
         raise HTTPException(status_code=500, detail=f"Auth storage error: {exc}")

@@ -181,15 +181,16 @@ class SQLiteStore:
 
         new_id = supabase_user_id or f"user-{uuid.uuid4().hex[:8]}"
         prefs = Preferences()
+        display_name = name or (email.split("@")[0] if email else "Intellex User")
         self.conn.execute(
             """
             INSERT INTO users (id, email, name, avatar_url, preferences)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (new_id, email, name or "Intellex User", None, json.dumps(prefs.model_dump(exclude_none=True))),
+            (new_id, email, display_name, None, json.dumps(prefs.model_dump(exclude_none=True))),
         )
         self.conn.commit()
-        return User(id=new_id, email=email, name=name or "Intellex User", preferences=prefs, avatarUrl=None)
+        return User(id=new_id, email=email, name=display_name, preferences=prefs, avatarUrl=None)
 
     def find_user(self, identifier: str) -> Optional[User]:
         row = self.conn.execute(
@@ -387,13 +388,14 @@ class SupabaseStore:
 
         new_id = supabase_user_id or f"user-{uuid.uuid4().hex[:8]}"
         prefs = Preferences()
+        display_name = name or (email.split("@")[0] if email else "Intellex User")
         inserted = (
             self.client.table("users")
             .insert(
                 {
                     "id": new_id,
                     "email": email,
-                    "name": name or "Intellex User",
+                    "name": display_name,
                     "avatar_url": None,
                     "preferences": prefs.model_dump(exclude_none=True),
                 }
