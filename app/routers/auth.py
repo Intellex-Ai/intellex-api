@@ -18,15 +18,19 @@ def login(payload: LoginRequest, store: DataStore = Depends(get_store)):
 @router.get("/me", response_model=User)
 def current_user(
     store: DataStore = Depends(get_store),
-    email: str | None = Query(None, description="Optional email to fetch a specific user"),
+    email: str | None = Query(None, description="Email to fetch a specific user"),
+    userId: str | None = Query(None, description="Supabase auth/user id to fetch a specific user"),
 ):
+    if not email and not userId:
+        raise HTTPException(status_code=400, detail="userId or email is required")
+
     user = None
-    if email:
+    if userId:
+        user = store.find_user(userId)
+    if not user and email:
         user = store.find_user(email)
     if not user:
-        user = store.get_first_user()
-    if not user:
-        raise HTTPException(status_code=404, detail="No users found")
+        raise HTTPException(status_code=404, detail="User not found")
     return user
 
 @router.delete("/account", status_code=status.HTTP_200_OK)
