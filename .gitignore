@@ -1,6 +1,8 @@
 venv/
 app/data/
 *.db
+__pycache__
+*_pycache_*
 
 # Docker
 Dockerfile
