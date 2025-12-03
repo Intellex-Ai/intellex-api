@@ -23,6 +23,11 @@ class LoginRequest(BaseModel):
     name: Optional[str] = Field(None, example="Demo Researcher")
     supabaseUserId: Optional[str] = Field(None, example="00000000-0000-0000-0000-000000000000")
 
+class DeleteAccountRequest(BaseModel):
+    userId: Optional[str] = Field(None, description="App user id / Supabase auth id")
+    email: Optional[str] = Field(None, description="Email address for lookup")
+    supabaseUserId: Optional[str] = Field(None, description="Supabase auth user id for auth deletion")
+
 class ResearchProject(BaseModel):
     id: str
     userId: str

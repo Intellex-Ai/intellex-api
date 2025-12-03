@@ -148,6 +148,7 @@ class DataStore(Protocol):
     def close(self) -> None: ...
     def get_or_create_user(self, email: str, name: Optional[str], supabase_user_id: Optional[str] = None) -> User: ...
     def find_user(self, identifier: str) -> Optional[User]: ...
+    def delete_user(self, user_id: Optional[str] = None, email: Optional[str] = None) -> bool: ...
     def get_first_user(self) -> Optional[User]: ...
     def list_projects(self, user_id: Optional[str]) -> list[ResearchProject]: ...
     def create_project(self, title: str, goal: str, user: User) -> ResearchProject: ...
@@ -196,6 +197,36 @@ class SQLiteStore:
             (identifier, identifier),
         ).fetchone()
         return to_user(dict(row)) if row else None
+
+    def delete_user(self, user_id: Optional[str] = None, email: Optional[str] = None) -> bool:
+        if not user_id and not email:
+            raise ValueError("user_id or email is required")
+
+        criteria = user_id or email
+        row = self.conn.execute(
+            "SELECT * FROM users WHERE id = ? OR email = ?",
+            (criteria, criteria),
+        ).fetchone()
+        if not row:
+            return False
+
+        uid = row["id"]
+        project_rows = self.conn.execute("SELECT id FROM projects WHERE user_id = ?", (uid,)).fetchall()
+        project_ids = [r["id"] for r in project_rows]
+
+        try:
+            self.conn.execute("BEGIN")
+            if project_ids:
+                self.conn.executemany("DELETE FROM messages WHERE project_id = ?", [(pid,) for pid in project_ids])
+                self.conn.executemany("DELETE FROM research_plans WHERE project_id = ?", [(pid,) for pid in project_ids])
+                self.conn.executemany("DELETE FROM projects WHERE id = ?", [(pid,) for pid in project_ids])
+
+            self.conn.execute("DELETE FROM users WHERE id = ?", (uid,))
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def get_first_user(self) -> Optional[User]:
         row = self.conn.execute("SELECT * FROM users ORDER BY rowid ASC LIMIT 1").fetchone()
@@ -383,6 +414,33 @@ class SupabaseStore:
             return to_user(by_id.data[0])
 
         return None
+
+    def delete_user(self, user_id: Optional[str] = None, email: Optional[str] = None) -> bool:
+        if not user_id and not email:
+            raise ValueError("user_id or email is required")
+
+        lookup = self.client.table("users").select("*")
+        if user_id:
+            lookup = lookup.eq("id", user_id)
+        elif email:
+            lookup = lookup.eq("email", email)
+        existing = lookup.limit(1).execute()
+        if not existing.data:
+            return False
+
+        user_row = existing.data[0]
+        uid = user_row.get("id")
+
+        projects = self.client.table("projects").select("id").eq("user_id", uid).execute()
+        project_ids = [row.get("id") for row in (projects.data or []) if row.get("id")]
+
+        if project_ids:
+            self.client.table("messages").delete().in_("project_id", project_ids).execute()
+            self.client.table("research_plans").delete().in_("project_id", project_ids).execute()
+            self.client.table("projects").delete().in_("id", project_ids).execute()
+
+        self.client.table("users").delete().eq("id", uid).execute()
+        return True
 
     def get_first_user(self) -> Optional[User]:
         row = self.client.table("users").select("*").order("email", desc=False).limit(1).execute()
