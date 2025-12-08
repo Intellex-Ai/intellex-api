@@ -1,7 +1,7 @@
 import uuid
-from typing import List, Optional
+from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.models import (
     AgentThought,
@@ -19,18 +19,20 @@ from app.storage import DataStore, get_store, now_ms
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 @router.get("", response_model=List[ResearchProject])
-def list_projects(user_id: Optional[str] = None, store: DataStore = Depends(get_store)):
-    return store.list_projects(user_id)
+def list_projects(user_id: str = Query(..., alias="userId", min_length=1), store: DataStore = Depends(get_store)):
+    user = store.find_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return store.list_projects(user.id)
 
 @router.post("", response_model=ResearchProject, status_code=201)
 def create_project(payload: CreateProjectRequest, store: DataStore = Depends(get_store)):
-    user = None
-    if payload.userId:
-        user = store.find_user(payload.userId)
+    if not payload.userId:
+        raise HTTPException(status_code=400, detail="userId is required to create a project.")
+
+    user = store.find_user(payload.userId)
     if not user:
-        user = store.get_first_user()
-    if not user:
-        raise HTTPException(status_code=400, detail="No user available to assign project.")
+        raise HTTPException(status_code=404, detail="User not found")
 
     project = store.create_project(payload.title, payload.goal, user)
     store.ensure_plan_for_project(project)

@@ -7,6 +7,8 @@ except ImportError:  # pragma: no cover - optional dependency in some environmen
     Client = None  # type: ignore
     create_client = None  # type: ignore
 
+REQUIRED_TABLES = ("users", "projects", "research_plans", "messages")
+
 
 @lru_cache(maxsize=1)
 def get_supabase() -> "Client | None":
@@ -32,12 +34,26 @@ def check_supabase_health() -> dict:
     if not client:
         return {"status": "not_configured"}
 
-    try:
-        response = client.table("users").select("id").limit(1).execute()
-        sample_count = len(response.data or []) if hasattr(response, "data") else 0
-        return {"status": "ok", "sampleCount": sample_count, "table": "users"}
-    except Exception as exc:  # pragma: no cover - runtime guard
-        return {"status": "error", "error": str(exc)}
+    table_counts = {}
+    errors: list[str] = []
+
+    for table in REQUIRED_TABLES:
+        try:
+            response = client.table(table).select("id").limit(1).execute()
+            if getattr(response, "error", None):
+                errors.append(f"{table}: {response.error}")
+            elif hasattr(response, "data"):
+                table_counts[table] = len(response.data or [])
+            else:
+                errors.append(f"{table}: missing data in response")
+        except Exception as exc:  # pragma: no cover - runtime guard
+            errors.append(f"{table}: {exc}")
+
+    status = "ok" if not errors else "error"
+    payload: dict = {"status": status, "tables": table_counts}
+    if errors:
+        payload["errors"] = errors
+    return payload
 
 
 def fetch_auth_metadata(auth_user_id: str) -> dict:

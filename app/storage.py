@@ -4,7 +4,6 @@ import sqlite3
 import uuid
 from typing import Generator, Optional, Protocol, Sequence, Union
 
-from app.database import DB_PATH, ensure_schema
 from app.models import (
     AgentThought,
     ChatMessage,
@@ -22,6 +21,9 @@ try:
     from supabase import Client
 except ImportError:  # pragma: no cover - optional dependency path
     Client = None  # type: ignore
+
+REQUIRED_SUPABASE_TABLES = ("users", "projects", "research_plans", "messages")
+_supabase_ready = False
 
 
 def default_preferences(raw: Union[str, dict, Preferences, None] = None) -> Preferences:
@@ -152,7 +154,7 @@ class DataStore(Protocol):
     def find_user(self, identifier: str) -> Optional[User]: ...
     def delete_user(self, user_id: Optional[str] = None, email: Optional[str] = None) -> bool: ...
     def get_first_user(self) -> Optional[User]: ...
-    def list_projects(self, user_id: Optional[str]) -> list[ResearchProject]: ...
+    def list_projects(self, user_id: str) -> list[ResearchProject]: ...
     def create_project(self, title: str, goal: str, user: User) -> ResearchProject: ...
     def get_project(self, project_id: str) -> Optional[ResearchProject]: ...
     def update_project(self, project_id: str, title: Optional[str], goal: Optional[str], status: Optional[str]) -> Optional[ResearchProject]: ...
@@ -238,14 +240,11 @@ class SQLiteStore:
         return to_user(dict(row)) if row else None
 
     # Project operations
-    def list_projects(self, user_id: Optional[str]) -> list[ResearchProject]:
-        if user_id:
-            rows = self.conn.execute(
-                "SELECT * FROM projects WHERE user_id = ? ORDER BY updated_at DESC",
-                (user_id,),
-            ).fetchall()
-        else:
-            rows = self.conn.execute("SELECT * FROM projects ORDER BY updated_at DESC").fetchall()
+    def list_projects(self, user_id: str) -> list[ResearchProject]:
+        rows = self.conn.execute(
+            "SELECT * FROM projects WHERE user_id = ? ORDER BY updated_at DESC",
+            (user_id,),
+        ).fetchall()
         return [to_project(dict(row)) for row in rows]
 
     def create_project(self, title: str, goal: str, user: User) -> ResearchProject:
@@ -492,11 +491,14 @@ class SupabaseStore:
         return None
 
     # Project operations
-    def list_projects(self, user_id: Optional[str]) -> list[ResearchProject]:
-        query = self.client.table("projects").select("*").order("updated_at", desc=True)
-        if user_id:
-            query = query.eq("user_id", user_id)
-        result = query.execute()
+    def list_projects(self, user_id: str) -> list[ResearchProject]:
+        result = (
+            self.client.table("projects")
+            .select("*")
+            .eq("user_id", user_id)
+            .order("updated_at", desc=True)
+            .execute()
+        )
         return [to_project(row) for row in result.data or []]
 
     def create_project(self, title: str, goal: str, user: User) -> ResearchProject:
@@ -651,7 +653,29 @@ class SupabaseStore:
 
 
 def get_storage_mode() -> str:
-    return "supabase" if get_supabase() else "sqlite"
+    configured = os.getenv("STORAGE_MODE", "supabase").lower()
+    if configured != "supabase":
+        return configured
+    return "supabase" if get_supabase() else "supabase-unconfigured"
+
+
+def validate_supabase_schema(client: Client) -> None:
+    """
+    Ensure the required Supabase tables are reachable. Cache the result to avoid
+    redundant checks on every request.
+    """
+    global _supabase_ready
+    if _supabase_ready:
+        return
+
+    for table in REQUIRED_SUPABASE_TABLES:
+        response = client.table(table).select("id").limit(1).execute()
+        if getattr(response, "error", None):
+            raise RuntimeError(f"Supabase table '{table}' not ready: {response.error}")
+        if not hasattr(response, "data"):
+            raise RuntimeError(f"Supabase response from '{table}' missing data")
+
+    _supabase_ready = True
 
 
 def get_store() -> Generator[DataStore, None, None]:
@@ -659,18 +683,17 @@ def get_store() -> Generator[DataStore, None, None]:
     FastAPI dependency that yields a storage backend.
     Supabase-only per configuration; returns 503 if Supabase is unavailable.
     """
-    client = get_supabase() if os.getenv("STORAGE_MODE", "supabase").lower() == "supabase" else None
+    storage_mode = os.getenv("STORAGE_MODE", "supabase").lower()
+    if storage_mode != "supabase":
+        raise HTTPException(status_code=503, detail="Supabase storage is required (set STORAGE_MODE=supabase).")
+
+    client = get_supabase()
 
     if not client:
         raise HTTPException(status_code=503, detail="Supabase is required but not configured.")
 
     try:
-        probe = client.table("users").select("id").limit(1).execute()
-        if getattr(probe, "error", None):
-            raise RuntimeError(f"Supabase users table not ready: {probe.error}")
-        if not hasattr(probe, "data"):
-            raise RuntimeError("Supabase response missing data")
+        validate_supabase_schema(client)
         yield SupabaseStore(client)
-        return
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Supabase not ready: {exc}")

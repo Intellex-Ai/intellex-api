@@ -72,7 +72,7 @@ class ChatMessage(BaseModel):
 class CreateProjectRequest(BaseModel):
     title: str
     goal: str
-    userId: Optional[str] = None
+    userId: str = Field(..., min_length=1, description="Supabase auth/user id")
 
 class UpdateProjectRequest(BaseModel):
     title: Optional[str] = None
