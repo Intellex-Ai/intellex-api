@@ -153,6 +153,8 @@ class DataStore(Protocol):
     def list_projects(self, user_id: Optional[str]) -> list[ResearchProject]: ...
     def create_project(self, title: str, goal: str, user: User) -> ResearchProject: ...
     def get_project(self, project_id: str) -> Optional[ResearchProject]: ...
+    def update_project(self, project_id: str, title: Optional[str], goal: Optional[str], status: Optional[str]) -> Optional[ResearchProject]: ...
+    def delete_project(self, project_id: str) -> bool: ...
     def ensure_plan_for_project(self, project: ResearchProject) -> ResearchPlan: ...
     def get_plan(self, project_id: str) -> Optional[ResearchPlan]: ...
     def append_plan_item(self, project_id: str, content: str) -> Optional[ResearchPlan]: ...
@@ -269,6 +271,43 @@ class SQLiteStore:
     def get_project(self, project_id: str) -> Optional[ResearchProject]:
         row = self.conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
         return to_project(dict(row)) if row else None
+
+    def update_project(self, project_id: str, title: Optional[str], goal: Optional[str], status: Optional[str]) -> Optional[ResearchProject]:
+        existing = self.get_project(project_id)
+        if not existing:
+            return None
+
+        updates = {}
+        if title is not None:
+            updates["title"] = title
+        if goal is not None:
+            updates["goal"] = goal
+        if status is not None:
+            updates["status"] = status
+        if not updates:
+            return existing
+
+        updates["updated_at"] = now_ms()
+        updates["project_id"] = project_id
+        sets = ", ".join([f"{key} = :{key}" for key in updates if key != "project_id"])
+
+        self.conn.execute(f"UPDATE projects SET {sets} WHERE id = :project_id", updates)
+        self.conn.commit()
+        return self.get_project(project_id)
+
+    def delete_project(self, project_id: str) -> bool:
+        existing = self.get_project(project_id)
+        if not existing:
+            return False
+        try:
+            self.conn.execute("DELETE FROM messages WHERE project_id = ?", (project_id,))
+            self.conn.execute("DELETE FROM research_plans WHERE project_id = ?", (project_id,))
+            self.conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+            self.conn.commit()
+            return True
+        except Exception:
+            self.conn.rollback()
+            raise
 
     # Plan operations
     def ensure_plan_for_project(self, project: ResearchProject) -> ResearchPlan:
@@ -486,6 +525,42 @@ class SupabaseStore:
         if result.data:
             return to_project(result.data[0])
         return None
+
+    def update_project(self, project_id: str, title: Optional[str], goal: Optional[str], status: Optional[str]) -> Optional[ResearchProject]:
+        existing = self.get_project(project_id)
+        if not existing:
+            return None
+
+        updates: dict = {}
+        if title is not None:
+            updates["title"] = title
+        if goal is not None:
+            updates["goal"] = goal
+        if status is not None:
+            updates["status"] = status
+        if not updates:
+            return existing
+
+        updates["updated_at"] = now_ms()
+        updated = (
+            self.client.table("projects")
+            .update(updates)
+            .eq("id", project_id)
+            .select("*")
+            .single()
+            .execute()
+        )
+        return to_project(updated.data) if updated.data else existing
+
+    def delete_project(self, project_id: str) -> bool:
+        existing = self.get_project(project_id)
+        if not existing:
+            return False
+
+        self.client.table("messages").delete().eq("project_id", project_id).execute()
+        self.client.table("research_plans").delete().eq("project_id", project_id).execute()
+        self.client.table("projects").delete().eq("id", project_id).execute()
+        return True
 
     # Plan operations
     def ensure_plan_for_project(self, project: ResearchProject) -> ResearchPlan:

@@ -74,6 +74,11 @@ class CreateProjectRequest(BaseModel):
     goal: str
     userId: Optional[str] = None
 
+class UpdateProjectRequest(BaseModel):
+    title: Optional[str] = None
+    goal: Optional[str] = None
+    status: Optional[str] = Field(None, description="draft | active | completed | archived")
+
 class CreateMessageRequest(BaseModel):
     content: str
 

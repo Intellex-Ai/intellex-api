@@ -8,6 +8,7 @@ from app.models import (
     ChatMessage,
     CreateMessageRequest,
     CreateProjectRequest,
+    UpdateProjectRequest,
     ResearchPlan,
     ResearchProject,
     SendMessageResponse,
@@ -41,6 +42,25 @@ def get_project(project_id: str, store: DataStore = Depends(get_store)):
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     return project
+
+@router.patch("/{project_id}", response_model=ResearchProject)
+def update_project(project_id: str, payload: UpdateProjectRequest, store: DataStore = Depends(get_store)):
+    project = store.update_project(
+        project_id,
+        title=payload.title,
+        goal=payload.goal,
+        status=payload.status,
+    )
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
+
+@router.delete("/{project_id}", status_code=204)
+def delete_project(project_id: str, store: DataStore = Depends(get_store)):
+    deleted = store.delete_project(project_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return None
 
 @router.get("/{project_id}/plan", response_model=ResearchPlan)
 def get_plan(project_id: str, store: DataStore = Depends(get_store)):
