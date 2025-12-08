@@ -9,17 +9,24 @@ except ImportError:  # pragma: no cover - optional dependency in some environmen
 
 REQUIRED_TABLES = ("users", "projects", "research_plans", "messages")
 
+def _clean(value: str | None) -> str | None:
+    if value is None:
+        return None
+    sanitized = value.strip().strip('"').strip("'")
+    return sanitized or None
+
 
 @lru_cache(maxsize=1)
 def get_supabase() -> "Client | None":
     """
     Return a cached Supabase client when env vars are configured.
+    Leading/trailing quotes/newlines are stripped to avoid misconfiguration.
     """
     if not create_client:
         return None
 
-    url = os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
-    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY") or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+    url = _clean(os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL"))
+    key = _clean(os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY") or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY"))
     if not url or not key:
         return None
 
@@ -30,9 +37,20 @@ def get_supabase() -> "Client | None":
 
 
 def check_supabase_health() -> dict:
+    # Clear cache to avoid sticky None when envs are injected after a cold start.
+    get_supabase.cache_clear()  # type: ignore[attr-defined]
+    url = _clean(os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL"))
+    key = _clean(os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY") or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY"))
+    missing = [name for name, val in [("SUPABASE_URL", url), ("SUPABASE_SERVICE_ROLE_KEY/ANON_KEY", key)] if not val]
+
     client = get_supabase()
     if not client:
-        return {"status": "not_configured"}
+        return {
+            "status": "not_configured",
+            "missing": missing,
+            "hasUrl": bool(url),
+            "hasKey": bool(key),
+        }
 
     table_counts = {}
     errors: list[str] = []

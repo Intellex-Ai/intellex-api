@@ -418,12 +418,10 @@ class SupabaseStore:
                     self.client.table("users")
                     .update({"name": name.strip()})
                     .eq("id", user_row.get("id"))
-                    .select("*")
-                    .single()
                     .execute()
                 )
                 if updated.data:
-                    user_row = updated.data
+                    user_row = updated.data[0]
             return to_user(user_row)
 
         new_id = supabase_user_id or f"user-{uuid.uuid4().hex[:8]}"
@@ -440,11 +438,15 @@ class SupabaseStore:
                     "preferences": prefs.model_dump(exclude_none=True),
                 }
             )
-            .select("*")
-            .single()
             .execute()
         )
-        return to_user(inserted.data)
+        if inserted.data:
+            return to_user(inserted.data[0])
+        # Fallback: re-query
+        created = self.client.table("users").select("*").eq("id", new_id).limit(1).execute()
+        if created.data:
+            return to_user(created.data[0])
+        raise RuntimeError("Failed to create user")
 
     def find_user(self, identifier: str) -> Optional[User]:
         by_email = self.client.table("users").select("*").eq("email", identifier).limit(1).execute()
@@ -518,11 +520,14 @@ class SupabaseStore:
                     "last_message_at": None,
                 }
             )
-            .select("*")
-            .single()
             .execute()
         )
-        return to_project(inserted.data)
+        if inserted.data:
+            return to_project(inserted.data[0])
+        created = self.client.table("projects").select("*").eq("id", project_id).limit(1).execute()
+        if created.data:
+            return to_project(created.data[0])
+        raise RuntimeError("Failed to create project")
 
     def get_project(self, project_id: str) -> Optional[ResearchProject]:
         result = self.client.table("projects").select("*").eq("id", project_id).limit(1).execute()
@@ -546,15 +551,10 @@ class SupabaseStore:
             return existing
 
         updates["updated_at"] = now_ms()
-        updated = (
-            self.client.table("projects")
-            .update(updates)
-            .eq("id", project_id)
-            .select("*")
-            .single()
-            .execute()
-        )
-        return to_project(updated.data) if updated.data else existing
+        updated = self.client.table("projects").update(updates).eq("id", project_id).execute()
+        if updated.data:
+            return to_project(updated.data[0])
+        return existing
 
     def delete_project(self, project_id: str) -> bool:
         existing = self.get_project(project_id)
@@ -585,11 +585,14 @@ class SupabaseStore:
                     "updated_at": timestamp,
                 }
             )
-            .select("*")
-            .single()
             .execute()
         )
-        return to_plan(inserted.data)
+        if inserted.data:
+            return to_plan(inserted.data[0])
+        created = self.client.table("research_plans").select("*").eq("id", plan_id).limit(1).execute()
+        if created.data:
+            return to_plan(created.data[0])
+        raise RuntimeError("Failed to create research plan")
 
     def get_plan(self, project_id: str) -> Optional[ResearchPlan]:
         result = self.client.table("research_plans").select("*").eq("project_id", project_id).limit(1).execute()
@@ -617,11 +620,11 @@ class SupabaseStore:
             self.client.table("research_plans")
             .update({"items": [item.model_dump() for item in plan.items], "updated_at": plan.updatedAt})
             .eq("id", plan.id)
-            .select("*")
-            .single()
             .execute()
         )
-        return to_plan(updated.data)
+        if updated.data:
+            return to_plan(updated.data[0])
+        return self.get_plan(project_id)
 
     # Message operations
     def get_messages(self, project_id: str) -> list[ChatMessage]:

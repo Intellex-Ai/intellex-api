@@ -1,4 +1,5 @@
 .venv/
+venv/
 app/data/
 *.db
 __pycache__
@@ -10,4 +11,4 @@ docker-compose.yml
 docker-compose.*.yml
 .dockerignore
 .vercel
-.env*.local
+.env.*
