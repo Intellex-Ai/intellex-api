@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 import uuid
 from typing import Generator, Optional, Protocol, Sequence, Union
@@ -657,6 +658,28 @@ def get_store() -> Generator[DataStore, None, None]:
     FastAPI dependency that yields a storage backend.
     Prefers Supabase when configured, falls back to SQLite.
     """
+    if os.getenv("STORAGE_MODE", "sqlite").lower() == "sqlite":
+        client = None
+    else:
+        client = get_supabase()
+
+    # If explicitly configured for sqlite or Supabase client missing/unhealthy, use sqlite.
+    if not client:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        try:
+            ensure_schema(conn)
+            conn.commit()
+        except Exception:
+            pass
+        store = SQLiteStore(conn)
+        try:
+            yield store
+        finally:
+            store.close()
+        return
+
     client = get_supabase()
     if client:
         # Ensure required tables exist; otherwise fall back to SQLite to avoid 500s.
@@ -664,6 +687,9 @@ def get_store() -> Generator[DataStore, None, None]:
             probe = client.table("users").select("id").limit(1).execute()
             if getattr(probe, "error", None):
                 raise RuntimeError(f"Supabase users table not ready: {probe.error}")
+            # If data attribute is missing, treat as not ready.
+            if not hasattr(probe, "data"):
+                raise RuntimeError("Supabase response missing data")
             yield SupabaseStore(client)
             return
         except Exception:
