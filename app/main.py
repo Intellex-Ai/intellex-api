@@ -1,7 +1,16 @@
 import os
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+
+# Load environment variables for local dev (.env.local) and Vercel prod (.env.production).
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env.local")
+if os.getenv("VERCEL_ENV", "").lower() == "production":
+    load_dotenv(BASE_DIR / ".env.production")
+load_dotenv(BASE_DIR / ".env")
 
 from app.routers import auth, projects
 from app.storage import get_storage_mode

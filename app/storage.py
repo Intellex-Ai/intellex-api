@@ -694,7 +694,27 @@ def get_store() -> Generator[DataStore, None, None]:
     client = get_supabase()
 
     if not client:
-        raise HTTPException(status_code=503, detail="Supabase is required but not configured.")
+        def cleaned(name: str) -> str:
+            raw = os.getenv(name, "")
+            return raw.strip().strip('"').strip("'")
+
+        missing: list[str] = []
+        if not (cleaned("SUPABASE_URL") or cleaned("NEXT_PUBLIC_SUPABASE_URL")):
+            missing.append("SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)")
+        if not (
+            cleaned("SUPABASE_SERVICE_ROLE_KEY")
+            or cleaned("SUPABASE_ANON_KEY")
+            or cleaned("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+        ):
+            missing.append("SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY)")
+
+        hint = "Supabase is required but not configured."
+        if missing:
+            hint += f" Missing env: {', '.join(missing)}."
+        raise HTTPException(
+            status_code=503,
+            detail=hint + " Set the env vars in your API environment or .env and restart.",
+        )
 
     try:
         validate_supabase_schema(client)
