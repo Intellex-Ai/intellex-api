@@ -1,35 +1,40 @@
 import uuid
-from typing import List, Tuple
+from typing import Tuple
 
 from app.services.llm import llm_service
-from app.models import ResearchProject
+from app.models import AgentThought, ResearchProject
 from app.utils.time import now_ms
 
 class AgentOrchestrator:
     def __init__(self):
         pass
 
-    async def process_message(self, project: ResearchProject, user_content: str) -> Tuple[str, List[dict]]:
-        # 1. Generate Thoughts
-        thoughts = []
-        
-        # Thought 1: Analysis
-        thoughts.append({
-            "id": f"th-{uuid.uuid4().hex[:8]}",
-            "title": "Analyzing Request",
-            "content": f"Analyzing user input: '{user_content[:50]}...' in context of project '{project.title}'",
-            "status": "completed",
-            "timestamp": now_ms()
-        })
+    def _build_thought(self, title: str, content: str, base_timestamp: int, offset_ms: int = 0) -> AgentThought:
+        return AgentThought(
+            id=f"th-{uuid.uuid4().hex[:8]}",
+            title=title,
+            content=content,
+            status="completed",
+            timestamp=base_timestamp + offset_ms,
+        )
 
-        # Thought 2: Planning (Mock for now, could be LLM generated)
-        thoughts.append({
-            "id": f"th-{uuid.uuid4().hex[:8]}",
-            "title": "Formulating Strategy",
-            "content": "Determining best research path and sources.",
-            "status": "completed",
-            "timestamp": now_ms() + 500
-        })
+    async def process_message(self, project: ResearchProject, user_content: str) -> Tuple[str, list[AgentThought]]:
+        base_ts = now_ms()
+        preview = f"{user_content[:50]}..." if len(user_content) > 50 else user_content
+
+        thoughts: list[AgentThought] = [
+            self._build_thought(
+                "Analyzing Request",
+                f"Analyzing user input: '{preview}' in context of project '{project.title}'",
+                base_ts,
+            ),
+            self._build_thought(
+                "Formulating Strategy",
+                "Determining best research path and sources.",
+                base_ts,
+                500,
+            ),
+        ]
 
         # 2. Generate Response using LLM
         system_prompt = (
@@ -43,13 +48,14 @@ class AgentOrchestrator:
         response_content = await llm_service.generate_response(system_prompt, user_content)
 
         # Thought 3: Finalizing
-        thoughts.append({
-            "id": f"th-{uuid.uuid4().hex[:8]}",
-            "title": "Generating Response",
-            "content": "Synthesizing findings and formatting output.",
-            "status": "completed",
-            "timestamp": now_ms() + 1000
-        })
+        thoughts.append(
+            self._build_thought(
+                "Generating Response",
+                "Synthesizing findings and formatting output.",
+                base_ts,
+                1000,
+            )
+        )
 
         return response_content, thoughts
 

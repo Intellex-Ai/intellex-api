@@ -4,7 +4,6 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.models import (
-    AgentThought,
     ChatMessage,
     CreateMessageRequest,
     CreateProjectRequest,
@@ -103,7 +102,7 @@ async def send_message(project_id: str, payload: CreateMessageRequest, store: Da
 
     # Use Orchestrator to generate response
     agent_content, thoughts = await orchestrator.process_message(project, payload.content)
-    
+
     agent_message_id = f"msg-{uuid.uuid4().hex[:8]}"
     agent_timestamp = timestamp + 1500
 
@@ -113,7 +112,7 @@ async def send_message(project_id: str, payload: CreateMessageRequest, store: Da
         senderId="agent-researcher",
         senderType="agent",
         content=agent_content,
-        thoughts=[AgentThought(**t) for t in thoughts],
+        thoughts=thoughts,
         timestamp=agent_timestamp,
     )
 

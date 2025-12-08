@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 
@@ -13,11 +14,12 @@ if os.getenv("VERCEL_ENV", "").lower() == "production":
 load_dotenv(BASE_DIR / ".env")
 
 from app.routers import auth, projects
-from app.storage import get_storage_mode
-from app.supabase_client import check_supabase_health
+from app.storage import get_storage_mode, validate_supabase_schema
+from app.supabase_client import check_supabase_health, get_supabase
 from app.utils.time import now_ms
 
 APP_VERSION = "0.2.0"
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Intellex API",
@@ -42,6 +44,26 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(projects.router)
+
+@app.on_event("startup")
+async def prewarm_supabase():
+    """
+    Fail fast (or warn) on missing Supabase configuration and prime the schema check
+    so the first request doesn't pay the latency penalty.
+    """
+    storage_mode = get_storage_mode()
+    if not storage_mode.startswith("supabase"):
+        return
+
+    client = get_supabase()
+    if not client:
+        logger.warning("Supabase env vars not configured; API storage will return 503 until set.")
+        return
+
+    try:
+        validate_supabase_schema(client)
+    except Exception as exc:  # pragma: no cover - best-effort guard
+        logger.error("Supabase schema validation failed on startup", exc_info=exc)
 
 @app.get("/")
 async def root():
