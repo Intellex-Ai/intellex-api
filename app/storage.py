@@ -656,7 +656,8 @@ class SupabaseStore:
 
 
 def get_storage_mode() -> str:
-    configured = os.getenv("STORAGE_MODE", "supabase").lower()
+    raw = os.getenv("STORAGE_MODE", "supabase")
+    configured = raw.strip().strip('"').strip("'").lower()
     if configured != "supabase":
         return configured
     return "supabase" if get_supabase() else "supabase-unconfigured"
