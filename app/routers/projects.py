@@ -30,8 +30,7 @@ def create_project(payload: CreateProjectRequest, store: DataStore = Depends(get
     if not user:
         user = store.get_first_user()
     if not user:
-        # Provision a minimal guest user to avoid hard failures in fresh environments.
-        user = store.get_or_create_user("guest@intellex.local", "Guest User")
+        raise HTTPException(status_code=400, detail="No user available to assign project.")
 
     project = store.create_project(payload.title, payload.goal, user)
     store.ensure_plan_for_project(project)
