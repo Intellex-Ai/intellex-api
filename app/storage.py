@@ -14,10 +14,16 @@ from app.models import (
     User,
     ActivityItem,
     ProjectStats,
+    ApiKeyPayload,
+    ApiKeysResponse,
+    ApiKeySummary,
+    ApiKeyRecord,
+    ProjectShare,
 )
 from app.supabase_client import get_supabase
 from fastapi import HTTPException
 from app.utils.time import now_ms
+from app.utils.crypto import encrypt_secret
 
 try:
     from supabase import Client
@@ -169,6 +175,11 @@ class DataStore(Protocol):
     def update_project_timestamps(self, project_id: str, last_message_at: int, updated_at: int) -> None: ...
     def project_stats(self, user_id: str) -> ProjectStats: ...
     def recent_activity(self, user_id: str, limit: int = 10) -> list[ActivityItem]: ...
+    def save_api_keys(self, user_id: str, payload: ApiKeyPayload) -> ApiKeysResponse: ...
+    def get_api_keys(self, user_id: str) -> ApiKeysResponse: ...
+    def share_project(self, project_id: str, email: str, access: str) -> ProjectShare: ...
+    def list_shares(self, project_id: str) -> list[ProjectShare]: ...
+    def revoke_share(self, project_id: str, share_id: str) -> None: ...
 
 class SupabaseStore:
     def __init__(self, client: Client):
@@ -177,6 +188,12 @@ class SupabaseStore:
     def close(self) -> None:
         # Supabase client does not need explicit close
         return None
+
+    def _load_user_row(self, user_id: str) -> dict:
+        row = self.client.table("users").select("*").eq("id", user_id).limit(1).execute()
+        if not row.data:
+            raise HTTPException(status_code=404, detail="User not found")
+        return row.data[0]
 
     # User operations
     def get_or_create_user(self, email: str, name: Optional[str], supabase_user_id: Optional[str] = None) -> User:
@@ -425,6 +442,102 @@ class SupabaseStore:
             {"last_message_at": last_message_at, "updated_at": updated_at}
         ).eq("id", project_id).execute()
 
+    def save_api_keys(self, user_id: str, payload: ApiKeyPayload) -> ApiKeysResponse:
+        if not payload.openai and not payload.anthropic:
+            raise HTTPException(status_code=400, detail="At least one API key is required")
+
+        user_row = self._load_user_row(user_id)
+        preferences = default_preferences(user_row.get("preferences"))
+        current_keys = preferences.apiKeys or {}
+
+        updated_keys: dict[str, ApiKeyRecord] = {}
+        now = now_ms()
+        if payload.openai:
+            ciphertext = encrypt_secret(payload.openai)
+            updated_keys["openai"] = ApiKeyRecord(last4=payload.openai[-4:], storedAt=now)
+            current_keys["openai"] = {"ciphertext": ciphertext, "last4": payload.openai[-4:], "storedAt": now}
+        if payload.anthropic:
+            ciphertext = encrypt_secret(payload.anthropic)
+            updated_keys["anthropic"] = ApiKeyRecord(last4=payload.anthropic[-4:], storedAt=now)
+            current_keys["anthropic"] = {"ciphertext": ciphertext, "last4": payload.anthropic[-4:], "storedAt": now}
+
+        preferences.apiKeys = current_keys
+        self.client.table("users").update({"preferences": preferences.model_dump(exclude_none=True)}).eq("id", user_id).execute()
+
+        summaries = [
+            ApiKeySummary(provider=k, last4=v.last4, storedAt=v.storedAt)
+            for k, v in updated_keys.items()
+        ]
+        return ApiKeysResponse(keys=summaries)
+
+    def get_api_keys(self, user_id: str) -> ApiKeysResponse:
+        user_row = self._load_user_row(user_id)
+        preferences = default_preferences(user_row.get("preferences"))
+        api_keys = preferences.apiKeys or {}
+        summaries: list[ApiKeySummary] = []
+        for provider, data in api_keys.items():
+            last4 = None
+            stored_at = None
+            if isinstance(data, dict):
+                last4 = data.get("last4")
+                stored_at = data.get("storedAt")
+            elif isinstance(data, ApiKeyRecord):
+                last4 = data.last4
+                stored_at = data.storedAt
+            if last4 and stored_at:
+                summaries.append(ApiKeySummary(provider=provider, last4=last4, storedAt=int(stored_at)))
+        return ApiKeysResponse(keys=summaries)
+
+    def share_project(self, project_id: str, email: str, access: str) -> ProjectShare:
+        try:
+            inserted = (
+                self.client.table("project_shares")
+                .insert(
+                    {
+                        "id": f"share-{uuid.uuid4().hex[:8]}",
+                        "project_id": project_id,
+                        "email": email,
+                        "access": access,
+                        "invited_at": now_ms(),
+                    }
+                )
+                .execute()
+            )
+            if inserted.data:
+                row = inserted.data[0]
+                return ProjectShare(
+                    id=row.get("id"),
+                    projectId=row.get("project_id"),
+                    email=row.get("email"),
+                    access=row.get("access"),
+                    invitedAt=int(row.get("invited_at")),
+                )
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"Sharing not configured: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to share project")
+
+    def list_shares(self, project_id: str) -> list[ProjectShare]:
+        try:
+            res = self.client.table("project_shares").select("*").eq("project_id", project_id).order("invited_at", desc=True).execute()
+            shares = res.data or []
+            return [
+                ProjectShare(
+                    id=row.get("id"),
+                    projectId=row.get("project_id"),
+                    email=row.get("email"),
+                    access=row.get("access"),
+                    invitedAt=int(row.get("invited_at")),
+                )
+                for row in shares
+            ]
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"Sharing not configured: {exc}")
+
+    def revoke_share(self, project_id: str, share_id: str) -> None:
+        try:
+            self.client.table("project_shares").delete().eq("project_id", project_id).eq("id", share_id).execute()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"Sharing not configured: {exc}")
     def project_stats(self, user_id: str) -> ProjectStats:
         result = (
             self.client.table("projects")

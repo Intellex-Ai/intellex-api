@@ -1,12 +1,14 @@
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 class Preferences(BaseModel):
+    model_config = ConfigDict(extra="allow")
     theme: str = "system"
     title: str | None = None
     organization: str | None = None
     location: str | None = None
     bio: str | None = None
+    apiKeys: dict[str, dict] | None = None
 
 class User(BaseModel):
     id: str
@@ -101,3 +103,38 @@ class ActivityItem(BaseModel):
     description: str
     timestamp: int
     meta: Optional[str] = None
+
+
+class ApiKeyRecord(BaseModel):
+    last4: str
+    storedAt: int
+
+
+class ApiKeyPayload(BaseModel):
+    openai: Optional[str] = Field(None, description="OpenAI API key")
+    anthropic: Optional[str] = Field(None, description="Anthropic API key")
+
+
+class ApiKeySummary(BaseModel):
+    provider: str
+    last4: str
+    storedAt: int
+
+
+class ApiKeysResponse(BaseModel):
+    keys: list[ApiKeySummary]
+
+
+class ShareProjectRequest(BaseModel):
+    email: str = Field(..., description="Email to share the project with")
+    access: str = Field("viewer", description="viewer | editor")
+
+
+class ProjectShare(BaseModel):
+    id: str
+    projectId: str
+    email: str
+    access: str
+    invitedAt: int
+
+Preferences.model_rebuild()

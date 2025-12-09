@@ -13,6 +13,8 @@ from app.models import (
     SendMessageResponse,
     ProjectStats,
     ActivityItem,
+    ShareProjectRequest,
+    ProjectShare,
 )
 from app.services.orchestrator import orchestrator
 from app.storage import DataStore, get_store, now_ms
@@ -63,6 +65,44 @@ def recent_activity(
     if user_id != auth_user["id"]:
         raise HTTPException(status_code=403, detail="Cannot access activity for another user")
     return store.recent_activity(user_id, limit)
+
+
+@router.get("/{project_id}/shares", response_model=List[ProjectShare])
+def list_project_shares(
+    project_id: str,
+    auth_user: AuthContext = Depends(require_supabase_user),
+    store: DataStore = Depends(get_store),
+):
+    _ensure_owner(store.get_project(project_id), auth_user)
+    return store.list_shares(project_id)
+
+
+@router.post("/{project_id}/shares", response_model=ProjectShare, status_code=201)
+def share_project(
+    project_id: str,
+    payload: ShareProjectRequest,
+    auth_user: AuthContext = Depends(require_supabase_user),
+    store: DataStore = Depends(get_store),
+):
+    _ensure_owner(store.get_project(project_id), auth_user)
+    if not payload.email:
+        raise HTTPException(status_code=400, detail="email is required")
+    access = payload.access or "viewer"
+    if access not in {"viewer", "editor"}:
+        raise HTTPException(status_code=400, detail="access must be viewer or editor")
+    return store.share_project(project_id, payload.email, access)
+
+
+@router.delete("/{project_id}/shares/{share_id}", status_code=204)
+def revoke_project_share(
+    project_id: str,
+    share_id: str,
+    auth_user: AuthContext = Depends(require_supabase_user),
+    store: DataStore = Depends(get_store),
+):
+    _ensure_owner(store.get_project(project_id), auth_user)
+    store.revoke_share(project_id, share_id)
+    return None
 
 @router.post("", response_model=ResearchProject, status_code=201)
 def create_project(
