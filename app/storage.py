@@ -200,32 +200,54 @@ class SupabaseStore:
         existing = self.client.table("users").select("*").eq("email", email).limit(1).execute()
         if existing.data:
             user_row = existing.data[0]
-            # If the Supabase auth id changed (e.g., switching from password to OAuth with the same email),
-            # migrate the app user id and projects to the current auth uid so RLS stays aligned.
+            # If the Supabase auth id changed (e.g., password -> OAuth on same email),
+            # migrate the account to the current auth uid so RLS stays aligned.
             if supabase_user_id and user_row.get("id") and user_row.get("id") != supabase_user_id:
                 old_id = user_row.get("id")
+                # Snapshot data for the new row.
+                prefs = user_row.get("preferences") or {}
+                avatar = user_row.get("avatar_url")
+                display_name = user_row.get("name") or name or (email.split("@")[0] if email else "Intellex User")
+
                 try:
-                    # Re-point projects to the new auth id first.
-                    self.client.table("projects").update({"user_id": supabase_user_id}).eq("user_id", old_id).execute()
-                    # Update the user primary key to match the Supabase auth id.
-                    migrated = (
-                        self.client.table("users")
-                        .update({"id": supabase_user_id})
-                        .eq("id", old_id)
-                        .execute()
-                    )
-                    if migrated.data:
-                        user_row = migrated.data[0]
-                    else:
-                        refreshed = (
+                    # Create the target user row if it doesn't already exist.
+                    new_row = self.client.table("users").select("*").eq("id", supabase_user_id).limit(1).execute()
+                    if not new_row.data:
+                        placeholder_email = f"{email}+legacy-{old_id}"
+                        # Free the unique email constraint on the legacy row.
+                        self.client.table("users").update({"email": placeholder_email}).eq("id", old_id).execute()
+                        inserted = (
                             self.client.table("users")
-                            .select("*")
-                            .eq("id", supabase_user_id)
-                            .limit(1)
+                            .insert(
+                                {
+                                    "id": supabase_user_id,
+                                    "email": email,
+                                    "name": display_name,
+                                    "avatar_url": avatar,
+                                    "preferences": prefs,
+                                }
+                            )
                             .execute()
                         )
-                        if refreshed.data:
-                            user_row = refreshed.data[0]
+                        if inserted.data:
+                            user_row = inserted.data[0]
+                    else:
+                        user_row = new_row.data[0]
+
+                    # Re-point owned projects to the new auth uid now that the row exists.
+                    self.client.table("projects").update({"user_id": supabase_user_id}).eq("user_id", old_id).execute()
+                    # Drop the legacy user row to avoid duplicate identities.
+                    self.client.table("users").delete().eq("id", old_id).execute()
+
+                    refreshed = (
+                        self.client.table("users")
+                        .select("*")
+                        .eq("id", supabase_user_id)
+                        .limit(1)
+                        .execute()
+                    )
+                    if refreshed.data:
+                        user_row = refreshed.data[0]
                 except Exception as exc:  # pragma: no cover - defensive path
                     raise HTTPException(status_code=503, detail=f"Account merge failed: {exc}")
 
