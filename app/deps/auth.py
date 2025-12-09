@@ -36,10 +36,21 @@ def require_supabase_user(authorization: str | None = Header(default=None)) -> A
 
     token = _extract_token(authorization)
 
+    def fetch_user():
+        return client.auth.get_user(token)
+
     try:
-        result = client.auth.get_user(token)
-    except Exception as exc:  # pragma: no cover - runtime guard
-        raise HTTPException(status_code=401, detail=f"Auth lookup failed: {exc}") from exc
+        result = fetch_user()
+    except Exception:
+        # Retry once with a fresh client in case the underlying connection was closed.
+        get_supabase.cache_clear()  # type: ignore[attr-defined]
+        refreshed = get_supabase()
+        if not refreshed:
+            raise HTTPException(status_code=503, detail="Authentication service unavailable. Please retry.")
+        try:
+            result = refreshed.auth.get_user(token)
+        except Exception as exc:  # pragma: no cover - runtime guard
+            raise HTTPException(status_code=503, detail="Authentication service unavailable. Please retry.") from exc
 
     error = _get_attr(result, "error")
     if error:

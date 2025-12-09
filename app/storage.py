@@ -1,7 +1,7 @@
 import json
 import os
-import sqlite3
 import uuid
+from datetime import datetime
 from typing import Generator, Optional, Protocol, Sequence, Union
 
 from app.models import (
@@ -12,6 +12,8 @@ from app.models import (
     ResearchPlanItem,
     ResearchProject,
     User,
+    ActivityItem,
+    ProjectStats,
 )
 from app.supabase_client import get_supabase
 from fastapi import HTTPException
@@ -165,239 +167,8 @@ class DataStore(Protocol):
     def get_messages(self, project_id: str) -> list[ChatMessage]: ...
     def insert_message(self, message: ChatMessage) -> None: ...
     def update_project_timestamps(self, project_id: str, last_message_at: int, updated_at: int) -> None: ...
-
-
-class SQLiteStore:
-    def __init__(self, conn: sqlite3.Connection):
-        self.conn = conn
-
-    def close(self) -> None:
-        self.conn.close()
-
-    # User operations
-    def get_or_create_user(self, email: str, name: Optional[str], supabase_user_id: Optional[str] = None) -> User:
-        existing = self.conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
-        if existing:
-            # Update the display name if a new non-empty name is provided and differs.
-            if name and str(existing["name"] or "").strip() != name.strip():
-                self.conn.execute("UPDATE users SET name = ? WHERE id = ?", (name.strip(), existing["id"]))
-                self.conn.commit()
-                existing = self.conn.execute("SELECT * FROM users WHERE id = ?", (existing["id"],)).fetchone()
-            return to_user(dict(existing))
-
-        new_id = supabase_user_id or f"user-{uuid.uuid4().hex[:8]}"
-        prefs = Preferences()
-        display_name = name or (email.split("@")[0] if email else "Intellex User")
-        self.conn.execute(
-            """
-            INSERT INTO users (id, email, name, avatar_url, preferences)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (new_id, email, display_name, None, json.dumps(prefs.model_dump(exclude_none=True))),
-        )
-        self.conn.commit()
-        return User(id=new_id, email=email, name=display_name, preferences=prefs, avatarUrl=None)
-
-    def find_user(self, identifier: str) -> Optional[User]:
-        row = self.conn.execute(
-            "SELECT * FROM users WHERE id = ? OR email = ?",
-            (identifier, identifier),
-        ).fetchone()
-        return to_user(dict(row)) if row else None
-
-    def delete_user(self, user_id: Optional[str] = None, email: Optional[str] = None) -> bool:
-        if not user_id and not email:
-            raise ValueError("user_id or email is required")
-
-        criteria = user_id or email
-        row = self.conn.execute(
-            "SELECT * FROM users WHERE id = ? OR email = ?",
-            (criteria, criteria),
-        ).fetchone()
-        if not row:
-            return False
-
-        uid = row["id"]
-        project_rows = self.conn.execute("SELECT id FROM projects WHERE user_id = ?", (uid,)).fetchall()
-        project_ids = [r["id"] for r in project_rows]
-
-        try:
-            self.conn.execute("BEGIN")
-            if project_ids:
-                self.conn.executemany("DELETE FROM messages WHERE project_id = ?", [(pid,) for pid in project_ids])
-                self.conn.executemany("DELETE FROM research_plans WHERE project_id = ?", [(pid,) for pid in project_ids])
-                self.conn.executemany("DELETE FROM projects WHERE id = ?", [(pid,) for pid in project_ids])
-
-            self.conn.execute("DELETE FROM users WHERE id = ?", (uid,))
-            self.conn.commit()
-            return True
-        except Exception:
-            self.conn.rollback()
-            raise
-
-    def get_first_user(self) -> Optional[User]:
-        row = self.conn.execute("SELECT * FROM users ORDER BY rowid ASC LIMIT 1").fetchone()
-        return to_user(dict(row)) if row else None
-
-    # Project operations
-    def list_projects(self, user_id: str) -> list[ResearchProject]:
-        rows = self.conn.execute(
-            "SELECT * FROM projects WHERE user_id = ? ORDER BY updated_at DESC",
-            (user_id,),
-        ).fetchall()
-        return [to_project(dict(row)) for row in rows]
-
-    def create_project(self, title: str, goal: str, user: User) -> ResearchProject:
-        project_id = f"proj-{uuid.uuid4().hex[:8]}"
-        timestamp = now_ms()
-        self.conn.execute(
-            """
-            INSERT INTO projects (id, user_id, title, goal, status, created_at, updated_at, last_message_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (project_id, user.id, title, goal, "active", timestamp, timestamp, None),
-        )
-        self.conn.commit()
-        return ResearchProject(
-            id=project_id,
-            userId=user.id,
-            title=title,
-            goal=goal,
-            status="active",
-            createdAt=timestamp,
-            updatedAt=timestamp,
-            lastMessageAt=None,
-        )
-
-    def get_project(self, project_id: str) -> Optional[ResearchProject]:
-        row = self.conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
-        return to_project(dict(row)) if row else None
-
-    def update_project(self, project_id: str, title: Optional[str], goal: Optional[str], status: Optional[str]) -> Optional[ResearchProject]:
-        existing = self.get_project(project_id)
-        if not existing:
-            return None
-
-        updates = {}
-        if title is not None:
-            updates["title"] = title
-        if goal is not None:
-            updates["goal"] = goal
-        if status is not None:
-            updates["status"] = status
-        if not updates:
-            return existing
-
-        updates["updated_at"] = now_ms()
-        updates["project_id"] = project_id
-        sets = ", ".join([f"{key} = :{key}" for key in updates if key != "project_id"])
-
-        self.conn.execute(f"UPDATE projects SET {sets} WHERE id = :project_id", updates)
-        self.conn.commit()
-        return self.get_project(project_id)
-
-    def delete_project(self, project_id: str) -> bool:
-        existing = self.get_project(project_id)
-        if not existing:
-            return False
-        try:
-            self.conn.execute("DELETE FROM messages WHERE project_id = ?", (project_id,))
-            self.conn.execute("DELETE FROM research_plans WHERE project_id = ?", (project_id,))
-            self.conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
-            self.conn.commit()
-            return True
-        except Exception:
-            self.conn.rollback()
-            raise
-
-    # Plan operations
-    def ensure_plan_for_project(self, project: ResearchProject) -> ResearchPlan:
-        existing = self.conn.execute(
-            "SELECT * FROM research_plans WHERE project_id = ?",
-            (project.id,),
-        ).fetchone()
-        if existing:
-            return to_plan(dict(existing))
-
-        items = default_plan_items(project.goal or project.title)
-        plan_id = f"plan-{uuid.uuid4().hex[:8]}"
-        timestamp = now_ms()
-        self.conn.execute(
-            """
-            INSERT INTO research_plans (id, project_id, items, updated_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (plan_id, project.id, json.dumps([item.model_dump() for item in items]), timestamp),
-        )
-        self.conn.commit()
-        return ResearchPlan(id=plan_id, projectId=project.id, items=items, updatedAt=timestamp)
-
-    def get_plan(self, project_id: str) -> Optional[ResearchPlan]:
-        row = self.conn.execute("SELECT * FROM research_plans WHERE project_id = ?", (project_id,)).fetchone()
-        return to_plan(dict(row)) if row else None
-
-    def append_plan_item(self, project_id: str, content: str) -> Optional[ResearchPlan]:
-        row = self.conn.execute(
-            "SELECT * FROM research_plans WHERE project_id = ?",
-            (project_id,),
-        ).fetchone()
-        if not row:
-            return None
-
-        plan = to_plan(dict(row))
-        new_item = ResearchPlanItem(
-            id=f"item-{uuid.uuid4().hex[:6]}",
-            title="New Research Lead",
-            description=content[:140],
-            status="in-progress",
-        )
-        plan.items.append(new_item)
-        plan.updatedAt = now_ms()
-
-        self.conn.execute(
-            "UPDATE research_plans SET items = ?, updated_at = ? WHERE id = ?",
-            (
-                json.dumps([item.model_dump() for item in plan.items]),
-                plan.updatedAt,
-                plan.id,
-            ),
-        )
-        self.conn.commit()
-        return plan
-
-    # Message operations
-    def get_messages(self, project_id: str) -> list[ChatMessage]:
-        rows = self.conn.execute(
-            "SELECT * FROM messages WHERE project_id = ? ORDER BY timestamp ASC",
-            (project_id,),
-        ).fetchall()
-        return [to_message(dict(row)) for row in rows]
-
-    def insert_message(self, message: ChatMessage) -> None:
-        self.conn.execute(
-            """
-            INSERT INTO messages (id, project_id, sender_id, sender_type, content, thoughts, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                message.id,
-                message.projectId,
-                message.senderId,
-                message.senderType,
-                message.content,
-                json.dumps([thought.model_dump() for thought in message.thoughts]) if message.thoughts else None,
-                message.timestamp,
-            ),
-        )
-        self.conn.commit()
-
-    def update_project_timestamps(self, project_id: str, last_message_at: int, updated_at: int) -> None:
-        self.conn.execute(
-            "UPDATE projects SET last_message_at = ?, updated_at = ? WHERE id = ?",
-            (last_message_at, updated_at, project_id),
-        )
-        self.conn.commit()
-
+    def project_stats(self, user_id: str) -> ProjectStats: ...
+    def recent_activity(self, user_id: str, limit: int = 10) -> list[ActivityItem]: ...
 
 class SupabaseStore:
     def __init__(self, client: Client):
@@ -654,12 +425,64 @@ class SupabaseStore:
             {"last_message_at": last_message_at, "updated_at": updated_at}
         ).eq("id", project_id).execute()
 
+    def project_stats(self, user_id: str) -> ProjectStats:
+        result = (
+            self.client.table("projects")
+            .select("status,updated_at")
+            .eq("user_id", user_id)
+            .order("updated_at", desc=True)
+            .execute()
+        )
+        projects = result.data or []
+        total = len(projects)
+        active = sum(1 for p in projects if (p.get("status") or "").lower() == "active")
+        completed = sum(1 for p in projects if (p.get("status") or "").lower() == "completed")
+        day_ago = now_ms() - 24 * 60 * 60 * 1000
+        updated_last_day = sum(1 for p in projects if isinstance(p.get("updated_at"), int) and p.get("updated_at") >= day_ago)
+
+        return ProjectStats(
+            totalProjects=total,
+            activeProjects=active,
+            completedProjects=completed,
+            updatedLastDay=updated_last_day,
+        )
+
+    def recent_activity(self, user_id: str, limit: int = 10) -> list[ActivityItem]:
+        result = (
+            self.client.table("projects")
+            .select("id,title,status,updated_at,created_at,last_message_at")
+            .eq("user_id", user_id)
+            .order("updated_at", desc=True)
+            .limit(max(limit, 1))
+            .execute()
+        )
+        projects = result.data or []
+        activities: list[ActivityItem] = []
+        for row in projects:
+            status = (row.get("status") or "").lower()
+            updated_at = row.get("updated_at") or row.get("last_message_at") or row.get("created_at") or now_ms()
+            activity_type = "research_completed" if status == "completed" else "project_updated"
+            desc = f"Research completed: \"{row.get('title') or 'Untitled'}\"" if activity_type == "research_completed" else f"Project updated: \"{row.get('title') or 'Untitled'}\""
+            meta = None
+            if row.get("created_at"):
+                created_at = int(row["created_at"])
+                meta = f"Created {datetime.utcfromtimestamp(created_at / 1000).isoformat()}Z"
+            activities.append(
+                ActivityItem(
+                    id=str(row.get("id")),
+                    type=activity_type,
+                    description=desc,
+                    timestamp=int(updated_at),
+                    meta=meta,
+                )
+            )
+        return activities
+
 
 def get_storage_mode() -> str:
-    raw = os.getenv("STORAGE_MODE", "supabase")
-    configured = raw.strip().strip('"').strip("'").lower()
-    if configured != "supabase":
-        return configured
+    """
+    Report storage availability; Supabase is the only supported backend.
+    """
     return "supabase" if get_supabase() else "supabase-unconfigured"
 
 
@@ -684,13 +507,9 @@ def validate_supabase_schema(client: Client) -> None:
 
 def get_store() -> Generator[DataStore, None, None]:
     """
-    FastAPI dependency that yields a storage backend.
-    Supabase-only per configuration; returns 503 if Supabase is unavailable.
+    FastAPI dependency that yields the Supabase storage backend.
+    Returns 503 if Supabase is unavailable or misconfigured.
     """
-    storage_mode = os.getenv("STORAGE_MODE", "supabase").lower()
-    if storage_mode != "supabase":
-        raise HTTPException(status_code=503, detail="Supabase storage is required (set STORAGE_MODE=supabase).")
-
     client = get_supabase()
 
     if not client:

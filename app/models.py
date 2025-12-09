@@ -86,3 +86,18 @@ class SendMessageResponse(BaseModel):
     userMessage: ChatMessage
     agentMessage: ChatMessage
     plan: Optional[ResearchPlan] = None
+
+
+class ProjectStats(BaseModel):
+    totalProjects: int
+    activeProjects: int
+    completedProjects: int
+    updatedLastDay: int
+
+
+class ActivityItem(BaseModel):
+    id: str
+    type: str
+    description: str
+    timestamp: int
+    meta: Optional[str] = None

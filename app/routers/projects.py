@@ -11,6 +11,8 @@ from app.models import (
     ResearchPlan,
     ResearchProject,
     SendMessageResponse,
+    ProjectStats,
+    ActivityItem,
 )
 from app.services.orchestrator import orchestrator
 from app.storage import DataStore, get_store, now_ms
@@ -39,6 +41,28 @@ def list_projects(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return store.list_projects(user.id)
+
+@router.get("/stats", response_model=ProjectStats)
+def project_stats(
+    user_id: str = Query(..., alias="userId", min_length=1),
+    auth_user: AuthContext = Depends(require_supabase_user),
+    store: DataStore = Depends(get_store),
+):
+    if user_id != auth_user["id"]:
+        raise HTTPException(status_code=403, detail="Cannot access stats for another user")
+    return store.project_stats(user_id)
+
+
+@router.get("/activity", response_model=List[ActivityItem])
+def recent_activity(
+    user_id: str = Query(..., alias="userId", min_length=1),
+    limit: int = Query(10, ge=1, le=50),
+    auth_user: AuthContext = Depends(require_supabase_user),
+    store: DataStore = Depends(get_store),
+):
+    if user_id != auth_user["id"]:
+        raise HTTPException(status_code=403, detail="Cannot access activity for another user")
+    return store.recent_activity(user_id, limit)
 
 @router.post("", response_model=ResearchProject, status_code=201)
 def create_project(
