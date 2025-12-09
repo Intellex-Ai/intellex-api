@@ -200,6 +200,35 @@ class SupabaseStore:
         existing = self.client.table("users").select("*").eq("email", email).limit(1).execute()
         if existing.data:
             user_row = existing.data[0]
+            # If the Supabase auth id changed (e.g., switching from password to OAuth with the same email),
+            # migrate the app user id and projects to the current auth uid so RLS stays aligned.
+            if supabase_user_id and user_row.get("id") and user_row.get("id") != supabase_user_id:
+                old_id = user_row.get("id")
+                try:
+                    # Re-point projects to the new auth id first.
+                    self.client.table("projects").update({"user_id": supabase_user_id}).eq("user_id", old_id).execute()
+                    # Update the user primary key to match the Supabase auth id.
+                    migrated = (
+                        self.client.table("users")
+                        .update({"id": supabase_user_id})
+                        .eq("id", old_id)
+                        .execute()
+                    )
+                    if migrated.data:
+                        user_row = migrated.data[0]
+                    else:
+                        refreshed = (
+                            self.client.table("users")
+                            .select("*")
+                            .eq("id", supabase_user_id)
+                            .limit(1)
+                            .execute()
+                        )
+                        if refreshed.data:
+                            user_row = refreshed.data[0]
+                except Exception as exc:  # pragma: no cover - defensive path
+                    raise HTTPException(status_code=503, detail=f"Account merge failed: {exc}")
+
             # Update the display name if a new non-empty name is provided and differs.
             if name and str(user_row.get("name") or "").strip() != name.strip():
                 updated = (
