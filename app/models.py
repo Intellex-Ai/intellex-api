@@ -188,4 +188,9 @@ class DeviceRevokeRequest(BaseModel):
     scope: Literal["single", "others", "all"] = Field("single", description="Revoke a specific device, all except the caller, or all devices")
     deviceId: Optional[str] = Field(None, description="Target device id. Required for scope=single or scope=others")
 
+
+class DeviceRevokeResponse(BaseModel):
+    revoked: int = Field(..., description="Number of device records marked revoked")
+    tokensRevoked: int = Field(..., description="Number of refresh tokens invalidated via auth admin")
+
 Preferences.model_rebuild()

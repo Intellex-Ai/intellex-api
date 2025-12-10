@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from app.deps.auth import AuthContext, require_supabase_user
-from app.models import DeviceListResponse, DeviceRecord, DeviceRevokeRequest, DeviceUpsertRequest
+from app.models import DeviceListResponse, DeviceRecord, DeviceRevokeRequest, DeviceRevokeResponse, DeviceUpsertRequest
 from app.storage import DataStore, get_store
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -33,7 +33,7 @@ def upsert_device(
     return store.upsert_device(auth_user["id"], normalized, request_ip)
 
 
-@router.post("/devices/revoke")
+@router.post("/devices/revoke", response_model=DeviceRevokeResponse)
 def revoke_devices(
     payload: DeviceRevokeRequest,
     auth_user: AuthContext = Depends(require_supabase_user),
@@ -44,5 +44,5 @@ def revoke_devices(
     if payload.scope in ("single", "others") and not device_id:
         raise HTTPException(status_code=400, detail="deviceId is required for this scope")
 
-    revoked = store.revoke_devices(auth_user["id"], payload.scope, device_id)
-    return {"revoked": revoked}
+    revoked_count, tokens_revoked = store.revoke_devices(auth_user["id"], payload.scope, device_id)
+    return {"revoked": revoked_count, "tokensRevoked": tokens_revoked}

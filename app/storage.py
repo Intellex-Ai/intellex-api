@@ -217,7 +217,7 @@ class DataStore(Protocol):
     def revoke_share(self, project_id: str, share_id: str) -> None: ...
     def upsert_device(self, user_id: str, payload: DeviceUpsertRequest, request_ip: Optional[str]) -> DeviceRecord: ...
     def list_devices(self, user_id: str) -> list[DeviceRecord]: ...
-    def revoke_devices(self, user_id: str, scope: str, device_id: Optional[str] = None) -> int: ...
+    def revoke_devices(self, user_id: str, scope: str, device_id: Optional[str] = None) -> tuple[int, int]: ...
 
 class SupabaseStore:
     def __init__(self, client: Client):
@@ -746,48 +746,60 @@ class SupabaseStore:
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"Device query failed: {exc}")
 
-    def revoke_devices(self, user_id: str, scope: str, device_id: Optional[str] = None) -> int:
+    def revoke_devices(self, user_id: str, scope: str, device_id: Optional[str] = None) -> tuple[int, int]:
         target_scope = scope or "single"
         now = now_ms()
-        try:
-            query = self.client.table("user_devices").update(
-                {"revoked_at": now, "refresh_token_ciphertext": None}
-            ).eq("user_id", user_id)
 
+        try:
+            select_query = self.client.table("user_devices").select("*").eq("user_id", user_id)
             if target_scope == "single":
                 if not device_id:
                     raise HTTPException(status_code=400, detail="deviceId is required to revoke a device")
-                query = query.eq("device_id", device_id)
+                select_query = select_query.eq("device_id", device_id)
             elif target_scope == "others":
                 if not device_id:
                     raise HTTPException(status_code=400, detail="deviceId is required to revoke other devices")
-                query = query.neq("device_id", device_id)
+                select_query = select_query.neq("device_id", device_id)
             elif target_scope == "all":
                 # No additional filter.
                 pass
             else:
                 raise HTTPException(status_code=400, detail="Invalid scope")
 
-            result = query.execute()
-            revoked_rows = result.data or []
+            rows_result = select_query.execute()
+            target_rows = rows_result.data or []
 
-            # Attempt remote sign-out if refresh tokens were stored and the client supports it.
-            if revoked_rows:
-                admin = getattr(self.client, "auth", None)
-                admin_api = getattr(admin, "admin", None) if admin else None
-                sign_out_fn = getattr(admin_api, "sign_out", None) if admin_api else None
-                if callable(sign_out_fn):
-                    for row in revoked_rows:
-                        cipher = row.get("refresh_token_ciphertext")
-                        token = decrypt_secret(cipher) if cipher else None
-                        if token:
-                            try:
-                                sign_out_fn(token)
-                            except Exception:
-                                # Non-blocking best-effort cleanup.
-                                continue
+            tokens_revoked = 0
+            admin = getattr(self.client, "auth", None)
+            admin_api = getattr(admin, "admin", None) if admin else None
+            sign_out_fn = getattr(admin_api, "sign_out", None) if admin_api else None
 
-            return len(revoked_rows)
+            # Attempt to revoke each stored refresh token (local scope), or global for full sign-out.
+            if callable(sign_out_fn):
+                for row in target_rows:
+                    cipher = row.get("refresh_token_ciphertext")
+                    token = decrypt_secret(cipher) if cipher else None
+                    if not token:
+                        continue
+                    try:
+                        # Global sign-out when requested, otherwise revoke just this token.
+                        sign_out_scope = "global" if target_scope == "all" else "local"
+                        sign_out_fn(token, sign_out_scope)
+                        tokens_revoked += 1
+                    except Exception:
+                        # Non-blocking best-effort cleanup.
+                        continue
+
+            update_query = self.client.table("user_devices").update(
+                {"revoked_at": now, "refresh_token_ciphertext": None}
+            ).eq("user_id", user_id)
+            if target_scope == "single":
+                update_query = update_query.eq("device_id", device_id)
+            elif target_scope == "others":
+                update_query = update_query.neq("device_id", device_id)
+
+            update_query.execute()
+            return len(target_rows), tokens_revoked
         except HTTPException:
             raise
         except Exception as exc:
