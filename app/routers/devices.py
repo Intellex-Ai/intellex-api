@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from app.deps.auth import AuthContext, require_supabase_user_allow_revoked
-from app.models import DeviceListResponse, DeviceRecord, DeviceRevokeRequest, DeviceRevokeResponse, DeviceUpsertRequest
+from app.models import DeviceDeleteResponse, DeviceListResponse, DeviceRecord, DeviceRevokeRequest, DeviceRevokeResponse, DeviceUpsertRequest
 from app.storage import DataStore, get_store
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -46,3 +46,13 @@ def revoke_devices(
 
     revoked_count, tokens_revoked = store.revoke_devices(auth_user["id"], payload.scope, device_id)
     return {"revoked": revoked_count, "tokensRevoked": tokens_revoked}
+
+
+@router.delete("/devices/{deviceId}", response_model=DeviceDeleteResponse)
+def delete_device(
+    deviceId: str,
+    auth_user: AuthContext = Depends(require_supabase_user_allow_revoked),
+    store: DataStore = Depends(get_store),
+):
+    deleted = store.delete_device(auth_user["id"], deviceId)
+    return {"deleted": deleted}

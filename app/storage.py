@@ -218,6 +218,7 @@ class DataStore(Protocol):
     def upsert_device(self, user_id: str, payload: DeviceUpsertRequest, request_ip: Optional[str]) -> DeviceRecord: ...
     def list_devices(self, user_id: str) -> list[DeviceRecord]: ...
     def revoke_devices(self, user_id: str, scope: str, device_id: Optional[str] = None) -> tuple[int, int]: ...
+    def delete_device(self, user_id: str, device_id: str) -> bool: ...
 
 class SupabaseStore:
     def __init__(self, client: Client):
@@ -786,6 +787,22 @@ class SupabaseStore:
             raise
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"Device revocation failed: {exc}")
+
+    def delete_device(self, user_id: str, device_id: str) -> bool:
+        if not device_id:
+            raise HTTPException(status_code=400, detail="deviceId is required")
+        try:
+            res = (
+                self.client.table("user_devices")
+                .delete()
+                .eq("user_id", user_id)
+                .eq("device_id", device_id)
+                .execute()
+            )
+            deleted = res.data or []
+            return bool(deleted)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"Device delete failed: {exc}")
     def project_stats(self, user_id: str) -> ProjectStats:
         result = (
             self.client.table("projects")

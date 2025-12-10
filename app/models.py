@@ -193,4 +193,8 @@ class DeviceRevokeResponse(BaseModel):
     revoked: int = Field(..., description="Number of device records marked revoked")
     tokensRevoked: int = Field(..., description="Number of refresh tokens invalidated via auth admin")
 
+
+class DeviceDeleteResponse(BaseModel):
+    deleted: bool
+
 Preferences.model_rebuild()
