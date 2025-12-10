@@ -13,7 +13,7 @@ if os.getenv("VERCEL_ENV", "").lower() == "production":
     load_dotenv(BASE_DIR / ".env.production")
 load_dotenv(BASE_DIR / ".env")
 
-from app.routers import auth, projects, users
+from app.routers import auth, projects, users, devices
 from app.storage import get_storage_mode, validate_supabase_schema
 from app.supabase_client import check_supabase_health, get_supabase
 from app.utils.time import now_ms
@@ -45,6 +45,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(projects.router)
 app.include_router(users.router)
+app.include_router(devices.router)
 
 @app.on_event("startup")
 async def prewarm_supabase():

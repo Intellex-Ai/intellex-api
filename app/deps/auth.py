@@ -8,6 +8,7 @@ from app.supabase_client import get_supabase
 class AuthContext(TypedDict):
     id: str
     email: Optional[str]
+    deviceId: Optional[str]
 
 
 def _extract_token(authorization: str | None) -> str:
@@ -29,7 +30,10 @@ def _get_attr(obj: Any, key: str) -> Any:
     return getattr(obj, key, None)
 
 
-def require_supabase_user(authorization: str | None = Header(default=None)) -> AuthContext:
+def require_supabase_user(
+    authorization: str | None = Header(default=None),
+    device_id: str | None = Header(default=None, alias="x-device-id"),
+) -> AuthContext:
     client = get_supabase()
     if not client:
         raise HTTPException(status_code=503, detail="Supabase is not configured")
@@ -67,4 +71,24 @@ def require_supabase_user(authorization: str | None = Header(default=None)) -> A
 
     email = _get_attr(user, "email")
 
-    return {"id": str(user_id), "email": email if email is None else str(email)}
+    if device_id:
+        try:
+            res = (
+                client.table("user_devices")
+                .select("id, revoked_at")
+                .eq("user_id", user_id)
+                .eq("device_id", device_id)
+                .limit(1)
+                .execute()
+            )
+            if res.data:
+                revoked_at = res.data[0].get("revoked_at")
+                if revoked_at:
+                    raise HTTPException(status_code=403, detail="This device has been signed out. Please sign in again.")
+        except HTTPException:
+            raise
+        except Exception:
+            # Non-blocking guard; auth proceeds if the device table is unavailable.
+            pass
+
+    return {"id": str(user_id), "email": email if email is None else str(email), "deviceId": device_id}

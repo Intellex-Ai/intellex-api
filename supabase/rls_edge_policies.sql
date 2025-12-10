@@ -75,3 +75,42 @@ create policy "project_shares_owner_manage"
             select id from public.projects where user_id = auth.uid()::text
         ) or auth.role() = 'service_role'
     );
+
+-- USER_DEVICES: track authenticated sessions per device; only owners (or service_role) can read/update.
+create table if not exists public.user_devices (
+    id uuid primary key default gen_random_uuid(),
+    user_id text not null,
+    device_id text not null,
+    user_agent text,
+    platform text,
+    browser text,
+    os text,
+    timezone text,
+    locale text,
+    screen text,
+    device_memory numeric,
+    city text,
+    region text,
+    ip text,
+    label text,
+    is_trusted boolean default false,
+    refresh_token_ciphertext text,
+    first_seen_at bigint not null,
+    last_seen_at bigint not null,
+    last_login_at bigint,
+    revoked_at bigint,
+    inserted_at timestamptz default now(),
+    updated_at timestamptz default now()
+);
+
+create unique index if not exists user_devices_user_device_uidx on public.user_devices (user_id, device_id);
+create index if not exists user_devices_user_idx on public.user_devices (user_id);
+create index if not exists user_devices_last_seen_idx on public.user_devices (last_seen_at desc);
+
+alter table public.user_devices enable row level security;
+drop policy if exists "user_devices_owner_only" on public.user_devices;
+create policy "user_devices_owner_only"
+    on public.user_devices
+    for all
+    using (user_id = auth.uid()::text or auth.role() = 'service_role')
+    with check (user_id = auth.uid()::text or auth.role() = 'service_role');

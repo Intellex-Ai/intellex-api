@@ -7,7 +7,7 @@ except ImportError:  # pragma: no cover - optional dependency in some environmen
     Client = None  # type: ignore
     create_client = None  # type: ignore
 
-REQUIRED_TABLES = ("users", "projects", "research_plans", "messages")
+REQUIRED_TABLES = ("users", "projects", "research_plans", "messages", "user_devices")
 
 def _clean(value: str | None) -> str | None:
     if value is None:

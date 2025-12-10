@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Literal
 from pydantic import BaseModel, Field, ConfigDict
 
 class Preferences(BaseModel):
@@ -136,5 +136,56 @@ class ProjectShare(BaseModel):
     email: str
     access: str
     invitedAt: int
+
+
+class DeviceUpsertRequest(BaseModel):
+    deviceId: str = Field(..., min_length=6, max_length=160, description="Client-generated stable device identifier")
+    userAgent: Optional[str] = None
+    platform: Optional[str] = None
+    browser: Optional[str] = None
+    os: Optional[str] = None
+    timezone: Optional[str] = None
+    locale: Optional[str] = None
+    screen: Optional[str] = Field(None, description="Viewport or screen size summary")
+    deviceMemory: Optional[float] = None
+    city: Optional[str] = None
+    region: Optional[str] = None
+    ip: Optional[str] = Field(None, description="Client-reported IP if available; server IP is authoritative")
+    label: Optional[str] = None
+    isTrusted: Optional[bool] = None
+    login: bool = Field(False, description="Whether this event is a login (updates last_login_at)")
+    refreshToken: Optional[str] = Field(None, description="Supabase refresh token to allow remote sign-out")
+
+
+class DeviceRecord(BaseModel):
+    id: str
+    userId: str
+    deviceId: str
+    userAgent: Optional[str] = None
+    platform: Optional[str] = None
+    browser: Optional[str] = None
+    os: Optional[str] = None
+    timezone: Optional[str] = None
+    locale: Optional[str] = None
+    screen: Optional[str] = None
+    deviceMemory: Optional[float] = None
+    city: Optional[str] = None
+    region: Optional[str] = None
+    ip: Optional[str] = None
+    label: Optional[str] = None
+    isTrusted: bool = False
+    firstSeenAt: int
+    lastSeenAt: int
+    lastLoginAt: Optional[int] = None
+    revokedAt: Optional[int] = None
+
+
+class DeviceListResponse(BaseModel):
+    devices: list[DeviceRecord]
+
+
+class DeviceRevokeRequest(BaseModel):
+    scope: Literal["single", "others", "all"] = Field("single", description="Revoke a specific device, all except the caller, or all devices")
+    deviceId: Optional[str] = Field(None, description="Target device id. Required for scope=single or scope=others")
 
 Preferences.model_rebuild()

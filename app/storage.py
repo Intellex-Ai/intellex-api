@@ -19,18 +19,20 @@ from app.models import (
     ApiKeySummary,
     ApiKeyRecord,
     ProjectShare,
+    DeviceRecord,
+    DeviceUpsertRequest,
 )
 from app.supabase_client import get_supabase
 from fastapi import HTTPException
 from app.utils.time import now_ms
-from app.utils.crypto import encrypt_secret
+from app.utils.crypto import encrypt_secret, decrypt_secret
 
 try:
     from supabase import Client
 except ImportError:  # pragma: no cover - optional dependency path
     Client = None  # type: ignore
 
-REQUIRED_SUPABASE_TABLES = ("users", "projects", "research_plans", "messages")
+REQUIRED_SUPABASE_TABLES = ("users", "projects", "research_plans", "messages", "user_devices")
 _supabase_ready = False
 
 
@@ -156,6 +158,39 @@ def to_message(row: dict) -> ChatMessage:
     )
 
 
+def to_device(row: dict) -> DeviceRecord:
+    def _as_int(value) -> Optional[int]:
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except Exception:
+            return None
+
+    return DeviceRecord(
+        id=str(row.get("id")),
+        userId=row.get("user_id"),
+        deviceId=row.get("device_id"),
+        userAgent=row.get("user_agent"),
+        platform=row.get("platform"),
+        browser=row.get("browser"),
+        os=row.get("os"),
+        timezone=row.get("timezone"),
+        locale=row.get("locale"),
+        screen=row.get("screen"),
+        deviceMemory=row.get("device_memory"),
+        city=row.get("city"),
+        region=row.get("region"),
+        ip=row.get("ip"),
+        label=row.get("label"),
+        isTrusted=bool(row.get("is_trusted") or False),
+        firstSeenAt=int(row.get("first_seen_at") or 0),
+        lastSeenAt=int(row.get("last_seen_at") or 0),
+        lastLoginAt=_as_int(row.get("last_login_at")),
+        revokedAt=_as_int(row.get("revoked_at")),
+    )
+
+
 class DataStore(Protocol):
     def close(self) -> None: ...
     def get_or_create_user(self, email: str, name: Optional[str], supabase_user_id: Optional[str] = None) -> User: ...
@@ -180,6 +215,9 @@ class DataStore(Protocol):
     def share_project(self, project_id: str, email: str, access: str) -> ProjectShare: ...
     def list_shares(self, project_id: str) -> list[ProjectShare]: ...
     def revoke_share(self, project_id: str, share_id: str) -> None: ...
+    def upsert_device(self, user_id: str, payload: DeviceUpsertRequest, request_ip: Optional[str]) -> DeviceRecord: ...
+    def list_devices(self, user_id: str) -> list[DeviceRecord]: ...
+    def revoke_devices(self, user_id: str, scope: str, device_id: Optional[str] = None) -> int: ...
 
 class SupabaseStore:
     def __init__(self, client: Client):
@@ -589,6 +627,171 @@ class SupabaseStore:
             self.client.table("project_shares").delete().eq("project_id", project_id).eq("id", share_id).execute()
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"Sharing not configured: {exc}")
+
+    # Device operations
+    def _device_updates_from_payload(self, payload: DeviceUpsertRequest, request_ip: Optional[str]) -> dict:
+        updates: dict = {
+            "ip": request_ip or payload.ip,
+        }
+        if payload.userAgent is not None:
+            updates["user_agent"] = payload.userAgent
+        if payload.platform is not None:
+            updates["platform"] = payload.platform
+        if payload.browser is not None:
+            updates["browser"] = payload.browser
+        if payload.os is not None:
+            updates["os"] = payload.os
+        if payload.timezone is not None:
+            updates["timezone"] = payload.timezone
+        if payload.locale is not None:
+            updates["locale"] = payload.locale
+        if payload.screen is not None:
+            updates["screen"] = payload.screen
+        if payload.deviceMemory is not None:
+            updates["device_memory"] = payload.deviceMemory
+        if payload.city is not None:
+            updates["city"] = payload.city
+        if payload.region is not None:
+            updates["region"] = payload.region
+        if payload.label is not None:
+            updates["label"] = payload.label
+        if payload.isTrusted is not None:
+            updates["is_trusted"] = payload.isTrusted
+        return updates
+
+    def upsert_device(self, user_id: str, payload: DeviceUpsertRequest, request_ip: Optional[str]) -> DeviceRecord:
+        if not payload.deviceId:
+            raise HTTPException(status_code=400, detail="deviceId is required")
+
+        now = now_ms()
+        device_id = payload.deviceId.strip()
+        refresh_cipher = None
+        if payload.refreshToken:
+            try:
+                refresh_cipher = encrypt_secret(payload.refreshToken)
+            except HTTPException:
+                # Encryption misconfiguration should block storing the token but not the device record.
+                refresh_cipher = None
+
+        try:
+            existing = (
+                self.client.table("user_devices")
+                .select("*")
+                .eq("user_id", user_id)
+                .eq("device_id", device_id)
+                .limit(1)
+                .execute()
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"Device lookup failed: {exc}")
+
+        updates = self._device_updates_from_payload(payload, request_ip)
+        updates["last_seen_at"] = now
+        if payload.login:
+            updates["last_login_at"] = now
+        if refresh_cipher:
+            updates["refresh_token_ciphertext"] = refresh_cipher
+
+        if existing.data:
+            row = existing.data[0]
+            # Clear revocation when the legitimate user logs in again on the same device.
+            updates["revoked_at"] = None
+            try:
+                updated = (
+                    self.client.table("user_devices")
+                    .update(updates)
+                    .eq("id", row.get("id"))
+                    .execute()
+                )
+                if updated.data:
+                    return to_device(updated.data[0])
+            except Exception as exc:
+                raise HTTPException(status_code=503, detail=f"Device update failed: {exc}")
+            # Fallback to the previous row if update returned no data.
+            return to_device(row)
+
+        payload_to_insert = {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "device_id": device_id,
+            "first_seen_at": now,
+            "last_seen_at": now,
+            "last_login_at": now if payload.login else None,
+            "revoked_at": None,
+            **updates,
+        }
+        if refresh_cipher:
+            payload_to_insert["refresh_token_ciphertext"] = refresh_cipher
+
+        try:
+            inserted = self.client.table("user_devices").insert(payload_to_insert).execute()
+            if inserted.data:
+                return to_device(inserted.data[0])
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"Device insert failed: {exc}")
+
+        raise HTTPException(status_code=500, detail="Unable to save device")
+
+    def list_devices(self, user_id: str) -> list[DeviceRecord]:
+        try:
+            res = (
+                self.client.table("user_devices")
+                .select("*")
+                .eq("user_id", user_id)
+                .order("last_seen_at", desc=True)
+                .execute()
+            )
+            rows = res.data or []
+            return [to_device(row) for row in rows]
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"Device query failed: {exc}")
+
+    def revoke_devices(self, user_id: str, scope: str, device_id: Optional[str] = None) -> int:
+        target_scope = scope or "single"
+        now = now_ms()
+        try:
+            query = self.client.table("user_devices").update(
+                {"revoked_at": now, "refresh_token_ciphertext": None}
+            ).eq("user_id", user_id)
+
+            if target_scope == "single":
+                if not device_id:
+                    raise HTTPException(status_code=400, detail="deviceId is required to revoke a device")
+                query = query.eq("device_id", device_id)
+            elif target_scope == "others":
+                if not device_id:
+                    raise HTTPException(status_code=400, detail="deviceId is required to revoke other devices")
+                query = query.neq("device_id", device_id)
+            elif target_scope == "all":
+                # No additional filter.
+                pass
+            else:
+                raise HTTPException(status_code=400, detail="Invalid scope")
+
+            result = query.execute()
+            revoked_rows = result.data or []
+
+            # Attempt remote sign-out if refresh tokens were stored and the client supports it.
+            if revoked_rows:
+                admin = getattr(self.client, "auth", None)
+                admin_api = getattr(admin, "admin", None) if admin else None
+                sign_out_fn = getattr(admin_api, "sign_out", None) if admin_api else None
+                if callable(sign_out_fn):
+                    for row in revoked_rows:
+                        cipher = row.get("refresh_token_ciphertext")
+                        token = decrypt_secret(cipher) if cipher else None
+                        if token:
+                            try:
+                                sign_out_fn(token)
+                            except Exception:
+                                # Non-blocking best-effort cleanup.
+                                continue
+
+            return len(revoked_rows)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"Device revocation failed: {exc}")
     def project_stats(self, user_id: str) -> ProjectStats:
         result = (
             self.client.table("projects")
