@@ -769,26 +769,8 @@ class SupabaseStore:
             rows_result = select_query.execute()
             target_rows = rows_result.data or []
 
+            # Admin sign-out is intentionally skipped to avoid over-revoking active sessions on other devices.
             tokens_revoked = 0
-            admin = getattr(self.client, "auth", None)
-            admin_api = getattr(admin, "admin", None) if admin else None
-            sign_out_fn = getattr(admin_api, "sign_out", None) if admin_api else None
-
-            # Avoid signing out "others" if admin sign_out is overly broad; use RLS revocation only.
-            if callable(sign_out_fn) and target_scope in ("single", "all"):
-                for row in target_rows:
-                    cipher = row.get("refresh_token_ciphertext")
-                    token = decrypt_secret(cipher) if cipher else None
-                    if not token:
-                        continue
-                    try:
-                        # Global sign-out when requested, otherwise revoke just this token.
-                        sign_out_scope = "global" if target_scope == "all" else "local"
-                        sign_out_fn(token, sign_out_scope)
-                        tokens_revoked += 1
-                    except Exception:
-                        # Non-blocking best-effort cleanup.
-                        continue
 
             update_query = self.client.table("user_devices").update(
                 {"revoked_at": now, "refresh_token_ciphertext": None}
