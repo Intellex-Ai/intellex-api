@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
-from app.deps.auth import AuthContext, require_supabase_user
+from app.deps.auth import AuthContext, require_supabase_user_allow_revoked
 from app.models import DeviceListResponse, DeviceRecord, DeviceRevokeRequest, DeviceRevokeResponse, DeviceUpsertRequest
 from app.storage import DataStore, get_store
 
@@ -9,7 +9,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.get("/devices", response_model=DeviceListResponse)
 def list_devices(
-    auth_user: AuthContext = Depends(require_supabase_user),
+    auth_user: AuthContext = Depends(require_supabase_user_allow_revoked),
     store: DataStore = Depends(get_store),
 ):
     devices = store.list_devices(auth_user["id"])
@@ -20,7 +20,7 @@ def list_devices(
 def upsert_device(
     payload: DeviceUpsertRequest,
     request: Request,
-    auth_user: AuthContext = Depends(require_supabase_user),
+    auth_user: AuthContext = Depends(require_supabase_user_allow_revoked),
     store: DataStore = Depends(get_store),
     device_header: str | None = Header(default=None, alias="x-device-id"),
 ):
@@ -36,7 +36,7 @@ def upsert_device(
 @router.post("/devices/revoke", response_model=DeviceRevokeResponse)
 def revoke_devices(
     payload: DeviceRevokeRequest,
-    auth_user: AuthContext = Depends(require_supabase_user),
+    auth_user: AuthContext = Depends(require_supabase_user_allow_revoked),
     store: DataStore = Depends(get_store),
     device_header: str | None = Header(default=None, alias="x-device-id"),
 ):

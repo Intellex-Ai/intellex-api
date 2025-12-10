@@ -33,6 +33,7 @@ def _get_attr(obj: Any, key: str) -> Any:
 def require_supabase_user(
     authorization: str | None = Header(default=None),
     device_id: str | None = Header(default=None, alias="x-device-id"),
+    skip_revoked_check: bool = False,
 ) -> AuthContext:
     client = get_supabase()
     if not client:
@@ -71,7 +72,7 @@ def require_supabase_user(
 
     email = _get_attr(user, "email")
 
-    if device_id:
+    if device_id and not skip_revoked_check:
         try:
             res = (
                 client.table("user_devices")
@@ -92,3 +93,14 @@ def require_supabase_user(
             pass
 
     return {"id": str(user_id), "email": email if email is None else str(email), "deviceId": device_id}
+
+
+def require_supabase_user_allow_revoked(
+    authorization: str | None = Header(default=None),
+    device_id: str | None = Header(default=None, alias="x-device-id"),
+) -> AuthContext:
+    """
+    Dependency variant that allows revoked devices to call device-management endpoints
+    so they can clear revocation and refresh tokens.
+    """
+    return require_supabase_user(authorization=authorization, device_id=device_id, skip_revoked_check=True)
