@@ -774,8 +774,8 @@ class SupabaseStore:
             admin_api = getattr(admin, "admin", None) if admin else None
             sign_out_fn = getattr(admin_api, "sign_out", None) if admin_api else None
 
-            # Attempt to revoke each stored refresh token (local scope), or global for full sign-out.
-            if callable(sign_out_fn):
+            # Avoid signing out "others" if admin sign_out is overly broad; use RLS revocation only.
+            if callable(sign_out_fn) and target_scope in ("single", "all"):
                 for row in target_rows:
                     cipher = row.get("refresh_token_ciphertext")
                     token = decrypt_secret(cipher) if cipher else None
