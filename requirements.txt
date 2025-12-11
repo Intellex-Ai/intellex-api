@@ -7,3 +7,6 @@ langchain-openai>=0.0.5
 langchain-anthropic>=0.1.0
 supabase>=2.7.1
 cryptography>=42.0.0
+
+# Shared OpenAPI client (local path; replace with published package for deploy)
+-e ../intellex-shared/packages/python
