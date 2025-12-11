@@ -86,7 +86,9 @@ class CreateMessageRequest(BaseModel):
 
 class SendMessageResponse(BaseModel):
     userMessage: ChatMessage
-    agentMessage: ChatMessage
+    agentMessage: Optional[ChatMessage] = None
+    jobId: Optional[str] = None
+    agentMessageId: Optional[str] = None
     plan: Optional[ResearchPlan] = None
 
 

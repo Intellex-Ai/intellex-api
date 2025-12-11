@@ -525,7 +525,8 @@ class SupabaseStore:
             "thoughts": [thought.model_dump() for thought in message.thoughts] if message.thoughts else None,
             "timestamp": message.timestamp,
         }
-        self.client.table("messages").insert(payload).execute()
+        # Use upsert to allow placeholder agent messages to be overwritten by orchestrator callbacks.
+        self.client.table("messages").upsert(payload, on_conflict="id").execute()
 
     def update_project_timestamps(self, project_id: str, last_message_at: int, updated_at: int) -> None:
         self.client.table("projects").update(

@@ -1,9 +1,12 @@
 import uuid
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from app.queue import enqueue_message as enqueue_orchestrator_message, get_redis
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 from app.models import (
+    AgentThought,
     ChatMessage,
     CreateMessageRequest,
     CreateProjectRequest,
@@ -17,6 +20,7 @@ from app.models import (
     ProjectShare,
 )
 from app.services.orchestrator import orchestrator
+from app.communications_client import send_email
 from app.storage import DataStore, get_store, now_ms
 from app.deps.auth import AuthContext, require_supabase_user
 
@@ -81,6 +85,7 @@ def list_project_shares(
 def share_project(
     project_id: str,
     payload: ShareProjectRequest,
+    background_tasks: BackgroundTasks,
     auth_user: AuthContext = Depends(require_supabase_user),
     store: DataStore = Depends(get_store),
 ):
@@ -90,7 +95,28 @@ def share_project(
     access = payload.access or "viewer"
     if access not in {"viewer", "editor"}:
         raise HTTPException(status_code=400, detail="access must be viewer or editor")
-    return store.share_project(project_id, payload.email, access)
+    shared = store.share_project(project_id, payload.email, access)
+
+    project = store.get_project(project_id)
+    if project:
+        background_tasks.add_task(
+            send_email,
+            to=payload.email,
+            template="project-share",
+            subject=f"You've been invited to '{project.title}'",
+            data={
+                "projectId": project_id,
+                "access": access,
+                "inviterEmail": auth_user.get("email"),
+            },
+            metadata={
+                "projectId": project_id,
+                "userId": auth_user.get("id"),
+                "source": "api",
+            },
+        )
+
+    return shared
 
 
 @router.delete("/{project_id}/shares/{share_id}", status_code=204)
@@ -188,7 +214,7 @@ def get_messages(
 
 
 
-@router.post("/{project_id}/messages", response_model=SendMessageResponse)
+@router.post("/{project_id}/messages", response_model=SendMessageResponse, status_code=202)
 async def send_message(
     project_id: str,
     payload: CreateMessageRequest,
@@ -210,7 +236,47 @@ async def send_message(
     )
     store.insert_message(user_msg)
 
-    # Use Orchestrator to generate response
+    updated_plan = store.append_plan_item(project.id, payload.content)
+
+    # If Redis is configured, enqueue orchestration work and return a placeholder agent message.
+    if get_redis():
+        try:
+            job_id, agent_message_id = await enqueue_orchestrator_message(
+                project=project,
+                user_content=payload.content,
+                callback_path="/orchestrator/callback",
+            )
+            agent_timestamp = timestamp + 500
+            placeholder_thought = AgentThought(
+                id=f"th-{uuid.uuid4().hex[:8]}",
+                title="Queued",
+                content="Message queued for processing.",
+                status="thinking",
+                timestamp=agent_timestamp,
+            )
+            agent_msg = ChatMessage(
+                id=agent_message_id,
+                projectId=project.id,
+                senderId="agent-researcher",
+                senderType="agent",
+                content=f"Processing (job {job_id})…",
+                thoughts=[placeholder_thought],
+                timestamp=agent_timestamp,
+            )
+            store.insert_message(agent_msg)
+            store.update_project_timestamps(project.id, agent_timestamp, agent_timestamp)
+            return SendMessageResponse(
+                userMessage=user_msg,
+                agentMessage=agent_msg,
+                jobId=job_id,
+                agentMessageId=agent_message_id,
+                plan=updated_plan,
+            )
+        except Exception as exc:
+            # Fall back to inline orchestration if enqueue fails.
+            print(f"Redis enqueue failed, falling back to inline orchestration: {exc}")
+
+    # Inline orchestrator path (dev / no Redis).
     agent_content, thoughts = await orchestrator.process_message(project, payload.content)
 
     agent_message_id = f"msg-{uuid.uuid4().hex[:8]}"
@@ -228,6 +294,5 @@ async def send_message(
 
     store.insert_message(agent_msg)
     store.update_project_timestamps(project.id, agent_timestamp, agent_timestamp)
-    updated_plan = store.append_plan_item(project.id, payload.content)
 
     return SendMessageResponse(userMessage=user_msg, agentMessage=agent_msg, plan=updated_plan)
