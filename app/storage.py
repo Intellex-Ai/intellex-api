@@ -890,7 +890,6 @@ def get_store() -> Generator[DataStore, None, None]:
     Returns 503 if Supabase is unavailable or misconfigured.
     """
     client = get_supabase()
-
     if not client:
         def cleaned(name: str) -> str:
             raw = os.getenv(name, "")
@@ -914,8 +913,19 @@ def get_store() -> Generator[DataStore, None, None]:
             detail=hint + " Set the env vars in your API environment or .env and restart.",
         )
 
+    store_client = client
     try:
-        validate_supabase_schema(client)
-        yield SupabaseStore(client)
+        validate_supabase_schema(store_client)
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Supabase not ready: {exc}")
+        # Retry once with a fresh client in case a cached client is stale/invalid.
+        get_supabase.cache_clear()  # type: ignore[attr-defined]
+        refreshed = get_supabase()
+        if not refreshed:
+            raise HTTPException(status_code=503, detail=f"Supabase not ready: {exc}")
+        store_client = refreshed
+        try:
+            validate_supabase_schema(store_client)
+        except Exception as exc2:
+            raise HTTPException(status_code=503, detail=f"Supabase not ready: {exc2}")
+
+    yield SupabaseStore(store_client)

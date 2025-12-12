@@ -1,5 +1,5 @@
 import os
-from typing import Optional, List
+from typing import Optional, List, Generator
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
@@ -20,20 +20,29 @@ class OrchestratorCallback(BaseModel):
     agentMessageId: Optional[str] = None
 
 
+def require_orchestrator_secret(
+    x_orchestrator_secret: Optional[str] = Header(None, alias="x-orchestrator-secret"),
+) -> None:
+    expected_secret = os.getenv("ORCHESTRATOR_CALLBACK_SECRET")
+    if expected_secret and x_orchestrator_secret != expected_secret:
+        raise HTTPException(status_code=401, detail="Invalid orchestrator secret")
+
+
+def get_store_for_orchestrator(
+    _: None = Depends(require_orchestrator_secret),
+) -> Generator[DataStore, None, None]:
+    yield from get_store()
+
+
 @router.post("/callback", status_code=204)
 def orchestrator_callback(
     payload: OrchestratorCallback,
-    store: DataStore = Depends(get_store),
-    x_orchestrator_secret: Optional[str] = Header(None, alias="x-orchestrator-secret"),
+    store: DataStore = Depends(get_store_for_orchestrator),
 ):
     """
     Receive job results from the orchestrator worker and upsert the agent message.
     If ORCHESTRATOR_CALLBACK_SECRET is set, require a matching x-orchestrator-secret header.
     """
-    expected_secret = os.getenv("ORCHESTRATOR_CALLBACK_SECRET")
-    if expected_secret and x_orchestrator_secret != expected_secret:
-        raise HTTPException(status_code=401, detail="Invalid orchestrator secret")
-
     project = store.get_project(payload.projectId)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -54,4 +63,3 @@ def orchestrator_callback(
     store.insert_message(agent_msg)
     store.update_project_timestamps(payload.projectId, timestamp, timestamp)
     return None
-
