@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import uuid
 from datetime import datetime
@@ -34,6 +35,7 @@ except ImportError:  # pragma: no cover - optional dependency path
 
 REQUIRED_SUPABASE_TABLES = ("users", "projects", "research_plans", "messages", "user_devices")
 _supabase_ready = False
+logger = logging.getLogger(__name__)
 
 
 def default_preferences(raw: Union[str, dict, Preferences, None] = None) -> Preferences:
@@ -115,12 +117,15 @@ def default_plan_items(goal_summary: str) -> list[ResearchPlanItem]:
 
 
 def to_user(row: dict) -> User:
+    preferences = default_preferences(row.get("preferences"))
+    # Never expose stored API-key ciphertext to clients.
+    preferences.apiKeys = None
     return User(
         id=row.get("id"),
         email=row.get("email"),
         name=row.get("name"),
         avatarUrl=row.get("avatar_url"),
-        preferences=default_preferences(row.get("preferences")),
+        preferences=preferences,
     )
 
 
@@ -288,7 +293,8 @@ class SupabaseStore:
                     if refreshed.data:
                         user_row = refreshed.data[0]
                 except Exception as exc:  # pragma: no cover - defensive path
-                    raise HTTPException(status_code=503, detail=f"Account merge failed: {exc}")
+                    logger.error("Account merge failed", exc_info=exc)
+                    raise HTTPException(status_code=503, detail="Account merge failed")
 
             # Update the display name if a new non-empty name is provided and differs.
             if name and str(user_row.get("name") or "").strip() != name.strip():
@@ -604,7 +610,8 @@ class SupabaseStore:
                     invitedAt=int(row.get("invited_at")),
                 )
         except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"Sharing not configured: {exc}")
+            logger.error("Project sharing failed", exc_info=exc)
+            raise HTTPException(status_code=503, detail="Project sharing failed")
         raise HTTPException(status_code=500, detail="Failed to share project")
 
     def list_shares(self, project_id: str) -> list[ProjectShare]:
@@ -622,13 +629,15 @@ class SupabaseStore:
                 for row in shares
             ]
         except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"Sharing not configured: {exc}")
+            logger.error("Project share listing failed", exc_info=exc)
+            raise HTTPException(status_code=503, detail="Project share listing failed")
 
     def revoke_share(self, project_id: str, share_id: str) -> None:
         try:
             self.client.table("project_shares").delete().eq("project_id", project_id).eq("id", share_id).execute()
         except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"Sharing not configured: {exc}")
+            logger.error("Project share revocation failed", exc_info=exc)
+            raise HTTPException(status_code=503, detail="Project share revocation failed")
 
     # Device operations
     def _device_updates_from_payload(self, payload: DeviceUpsertRequest, request_ip: Optional[str]) -> dict:
@@ -685,7 +694,8 @@ class SupabaseStore:
                 .execute()
             )
         except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"Device lookup failed: {exc}")
+            logger.error("Device lookup failed", exc_info=exc)
+            raise HTTPException(status_code=503, detail="Device lookup failed")
 
         updates = self._device_updates_from_payload(payload, request_ip)
         updates["last_seen_at"] = now
@@ -708,7 +718,8 @@ class SupabaseStore:
                 if updated.data:
                     return to_device(updated.data[0])
             except Exception as exc:
-                raise HTTPException(status_code=503, detail=f"Device update failed: {exc}")
+                logger.error("Device update failed", exc_info=exc)
+                raise HTTPException(status_code=503, detail="Device update failed")
             # Fallback to the previous row if update returned no data.
             return to_device(row)
 
@@ -730,7 +741,8 @@ class SupabaseStore:
             if inserted.data:
                 return to_device(inserted.data[0])
         except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"Device insert failed: {exc}")
+            logger.error("Device insert failed", exc_info=exc)
+            raise HTTPException(status_code=503, detail="Device insert failed")
 
         raise HTTPException(status_code=500, detail="Unable to save device")
 
@@ -746,7 +758,8 @@ class SupabaseStore:
             rows = res.data or []
             return [to_device(row) for row in rows]
         except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"Device query failed: {exc}")
+            logger.error("Device query failed", exc_info=exc)
+            raise HTTPException(status_code=503, detail="Device query failed")
 
     def revoke_devices(self, user_id: str, scope: str, device_id: Optional[str] = None) -> tuple[int, int]:
         target_scope = scope or "single"
@@ -787,7 +800,8 @@ class SupabaseStore:
         except HTTPException:
             raise
         except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"Device revocation failed: {exc}")
+            logger.error("Device revocation failed", exc_info=exc)
+            raise HTTPException(status_code=503, detail="Device revocation failed")
 
     def delete_device(self, user_id: str, device_id: str) -> bool:
         if not device_id:
@@ -803,7 +817,8 @@ class SupabaseStore:
             deleted = res.data or []
             return bool(deleted)
         except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"Device delete failed: {exc}")
+            logger.error("Device delete failed", exc_info=exc)
+            raise HTTPException(status_code=503, detail="Device delete failed")
     def project_stats(self, user_id: str) -> ProjectStats:
         result = (
             self.client.table("projects")
@@ -921,11 +936,13 @@ def get_store() -> Generator[DataStore, None, None]:
         get_supabase.cache_clear()  # type: ignore[attr-defined]
         refreshed = get_supabase()
         if not refreshed:
-            raise HTTPException(status_code=503, detail=f"Supabase not ready: {exc}")
+            logger.error("Supabase not ready", exc_info=exc)
+            raise HTTPException(status_code=503, detail="Supabase not ready")
         store_client = refreshed
         try:
             validate_supabase_schema(store_client)
         except Exception as exc2:
-            raise HTTPException(status_code=503, detail=f"Supabase not ready: {exc2}")
+            logger.error("Supabase not ready", exc_info=exc2)
+            raise HTTPException(status_code=503, detail="Supabase not ready")
 
     yield SupabaseStore(store_client)

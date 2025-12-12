@@ -1,3 +1,4 @@
+import logging
 import uuid
 from typing import List
 
@@ -25,6 +26,7 @@ from app.storage import DataStore, get_store, now_ms
 from app.deps.auth import AuthContext, require_supabase_user
 
 router = APIRouter(prefix="/projects", tags=["projects"])
+logger = logging.getLogger(__name__)
 
 def _ensure_owner(project: ResearchProject | None, auth_user: AuthContext) -> ResearchProject:
     if not project:
@@ -274,7 +276,7 @@ async def send_message(
             )
         except Exception as exc:
             # Fall back to inline orchestration if enqueue fails.
-            print(f"Redis enqueue failed, falling back to inline orchestration: {exc}")
+            logger.warning("Redis enqueue failed; falling back to inline orchestration", exc_info=exc)
 
     # Inline orchestrator path (dev / no Redis).
     agent_content, thoughts = await orchestrator.process_message(project, payload.content)

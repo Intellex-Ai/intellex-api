@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import Optional
 
@@ -7,6 +8,8 @@ from langchain_core.messages import SystemMessage, HumanMessage
 LLM_DISABLED_MESSAGE = (
     "I'm not connected to the model right now. Please set OPENAI_API_KEY (and OPENAI_MODEL/OPENAI_TEMPERATURE as needed)."
 )
+
+logger = logging.getLogger(__name__)
 
 class LLMService:
     def __init__(self):
@@ -38,7 +41,7 @@ class LLMService:
                 api_key=self.api_key,
             )
         except Exception as exc:  # pragma: no cover - defensive guard
-            print(f"LLM init error: {exc}")
+            logger.warning("LLM init error", exc_info=exc)
             return None
 
     async def generate_response(self, system_prompt: str, user_content: str) -> str:
@@ -52,7 +55,7 @@ class LLMService:
             response = await self.llm.ainvoke(messages)
             return response.content
         except Exception as e:
-            print(f"LLM Error: {e}")
+            logger.warning("LLM Error", exc_info=e)
             return "I'm having trouble connecting to my brain right now. Please check my API keys."
 
 llm_service = LLMService()

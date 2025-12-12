@@ -2,7 +2,7 @@ import os
 from typing import Optional, List, Generator
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models import AgentThought, ChatMessage
 from app.queue import build_agent_message_id
@@ -16,7 +16,7 @@ class OrchestratorCallback(BaseModel):
     jobId: str
     projectId: str
     response: str
-    thoughts: List[AgentThought] = []
+    thoughts: List[AgentThought] = Field(default_factory=list)
     agentMessageId: Optional[str] = None
 
 
@@ -24,7 +24,10 @@ def require_orchestrator_secret(
     x_orchestrator_secret: Optional[str] = Header(None, alias="x-orchestrator-secret"),
 ) -> None:
     expected_secret = os.getenv("ORCHESTRATOR_CALLBACK_SECRET")
-    if expected_secret and x_orchestrator_secret != expected_secret:
+    if not expected_secret:
+        raise HTTPException(status_code=503, detail="ORCHESTRATOR_CALLBACK_SECRET is not configured")
+
+    if x_orchestrator_secret != expected_secret:
         raise HTTPException(status_code=401, detail="Invalid orchestrator secret")
 
 
@@ -41,7 +44,7 @@ def orchestrator_callback(
 ):
     """
     Receive job results from the orchestrator worker and upsert the agent message.
-    If ORCHESTRATOR_CALLBACK_SECRET is set, require a matching x-orchestrator-secret header.
+    Requires a matching x-orchestrator-secret header.
     """
     project = store.get_project(payload.projectId)
     if not project:

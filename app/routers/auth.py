@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from starlette import status
 
@@ -7,6 +9,7 @@ from app.supabase_client import get_supabase, fetch_auth_metadata
 from app.deps.auth import AuthContext, require_supabase_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 
 @router.post("/login", response_model=User)
 def login(
@@ -35,9 +38,11 @@ def login(
             raise HTTPException(status_code=400, detail="Email is required")
 
         return store.get_or_create_user(email, name, supabase_user_id)
+    except HTTPException:
+        raise
     except Exception as exc:
-        # Surface a clearer 500 for easier debugging in prod
-        raise HTTPException(status_code=500, detail=f"Auth storage error: {exc}")
+        logger.error("Auth storage error", exc_info=exc)
+        raise HTTPException(status_code=500, detail="Auth storage error")
 
 @router.get("/me", response_model=User)
 def current_user(
@@ -103,9 +108,10 @@ def delete_account(
 
     if auth_error:
         # Surface auth deletion errors but do not roll back app deletion.
+        logger.warning("Supabase auth deletion failed", extra={"error": auth_error})
         raise HTTPException(
             status_code=502,
-            detail=f"Profile deletion: {profile_deleted}. Auth deletion failed: {auth_error}",
+            detail="Auth deletion failed after profile deletion. Please contact support.",
         )
 
     return {

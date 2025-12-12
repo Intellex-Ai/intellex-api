@@ -2,8 +2,30 @@
 venv/
 app/data/
 *.db
+*.sqlite
+*.sqlite3
 __pycache__
 *_pycache_*
+
+# Credentials / env (never commit)
+.env
+.env.*
+.envrc
+.npmrc
+.pypirc
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# OS / editors
+.DS_Store
+.idea
+.vscode
 
 # Docker
 Dockerfile
@@ -11,4 +33,3 @@ docker-compose.yml
 docker-compose.*.yml
 .dockerignore
 .vercel
-.env.*

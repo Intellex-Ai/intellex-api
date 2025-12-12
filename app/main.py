@@ -21,6 +21,14 @@ from app.utils.time import now_ms
 APP_VERSION = "0.2.0"
 logger = logging.getLogger(__name__)
 
+def _truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _runtime_env() -> str:
+    return (os.getenv("ENV") or os.getenv("VERCEL_ENV") or "").strip().lower()
+
+
 app = FastAPI(
     title="Intellex API",
     description="Backend for Intellex Research SaaS",
@@ -28,19 +36,47 @@ app = FastAPI(
 )
 
 # Configure CORS
-frontend_origins = os.getenv(
-    "FRONTEND_ORIGINS",
-    "http://localhost:3100,http://localhost:3001,https://intellex-web.vercel.app",
-).split(",")
-frontend_origin_regex = os.getenv("FRONTEND_ORIGIN_REGEX", r"https://.*\.vercel\.app")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[origin.strip() for origin in frontend_origins if origin.strip()],
-    allow_origin_regex=frontend_origin_regex or None,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+runtime_env = _runtime_env()
+is_dev = runtime_env in {"", "dev", "development", "local"}
+allow_any_origin = _truthy(os.getenv("FRONTEND_ALLOW_ANY_ORIGIN"))
+
+frontend_origins_raw = os.getenv("FRONTEND_ORIGINS")
+if not frontend_origins_raw and is_dev and not allow_any_origin:
+    frontend_origins_raw = "http://localhost:3100,http://localhost:3001"
+
+frontend_origin_regex = (os.getenv("FRONTEND_ORIGIN_REGEX") or "").strip() or None
+allow_origins = [origin.strip() for origin in (frontend_origins_raw or "").split(",") if origin.strip()]
+
+if runtime_env == "production" and allow_any_origin:
+    logger.warning("FRONTEND_ALLOW_ANY_ORIGIN is enabled in production; this is insecure.")
+if runtime_env == "production" and not allow_any_origin and not allow_origins and not frontend_origin_regex:
+    logger.warning(
+        "No FRONTEND_ORIGINS/FRONTEND_ORIGIN_REGEX configured; cross-origin browser requests will be blocked."
+    )
+
+cors_kwargs = {
+    "allow_methods": ["*"],
+    "allow_headers": ["*"],
+}
+if allow_any_origin:
+    cors_kwargs.update(
+        {
+            "allow_origins": ["*"],
+            "allow_origin_regex": None,
+            # Wildcard origins with credentials is insecure and rejected by browsers.
+            "allow_credentials": False,
+        }
+    )
+else:
+    cors_kwargs.update(
+        {
+            "allow_origins": allow_origins,
+            "allow_origin_regex": frontend_origin_regex,
+            "allow_credentials": True,
+        }
+    )
+
+app.add_middleware(CORSMiddleware, **cors_kwargs)
 
 app.include_router(auth.router)
 app.include_router(projects.router)

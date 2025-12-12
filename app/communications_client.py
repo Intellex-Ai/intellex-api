@@ -1,3 +1,4 @@
+import logging
 import os
 import uuid
 from typing import Any, Optional
@@ -7,6 +8,7 @@ import httpx
 
 COMMUNICATIONS_BASE_URL = os.getenv("COMMUNICATIONS_BASE_URL")
 COMMUNICATIONS_SEND_PATH = os.getenv("COMMUNICATIONS_SEND_PATH", "/send")
+logger = logging.getLogger(__name__)
 
 
 def send_email(
@@ -40,5 +42,4 @@ def send_email(
         with httpx.Client(timeout=10) as client:
             client.post(url, json=payload)
     except Exception as exc:  # pragma: no cover - best-effort
-        print(f"Communications send failed: {exc}")
-
+        logger.warning("Communications send failed", exc_info=exc)
