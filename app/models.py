@@ -1,4 +1,4 @@
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Any
 from pydantic import BaseModel, Field, ConfigDict
 
 class Preferences(BaseModel):
@@ -198,5 +198,39 @@ class DeviceRevokeResponse(BaseModel):
 
 class DeviceDeleteResponse(BaseModel):
     deleted: bool
+
+
+CommunicationStatus = Literal[
+    "queued",
+    "sent",
+    "failed",
+    "delivered",
+    "bounced",
+    "complaint",
+    "dropped",
+]
+
+
+class CommunicationMessageIn(BaseModel):
+    requestId: str = Field(..., min_length=1)
+    provider: str = Field(..., min_length=1)
+    providerMessageId: Optional[str] = None
+    channel: str = Field(..., min_length=1)
+    template: Optional[str] = None
+    recipient: Optional[str] = None
+    subject: Optional[str] = None
+    metadata: Optional[dict[str, Any]] = None
+    status: CommunicationStatus
+    error: Optional[str] = None
+    timestamp: Optional[int] = None
+
+
+class CommunicationEventIn(BaseModel):
+    provider: str = Field(..., min_length=1)
+    messageId: Optional[str] = None
+    requestId: Optional[str] = None
+    status: CommunicationStatus
+    timestamp: int = Field(..., ge=0)
+    payload: Optional[dict[str, Any]] = None
 
 Preferences.model_rebuild()

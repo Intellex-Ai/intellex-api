@@ -22,6 +22,8 @@ from app.models import (
     ProjectShare,
     DeviceRecord,
     DeviceUpsertRequest,
+    CommunicationMessageIn,
+    CommunicationEventIn,
 )
 from app.supabase_client import get_supabase
 from fastapi import HTTPException
@@ -33,7 +35,15 @@ try:
 except ImportError:  # pragma: no cover - optional dependency path
     Client = None  # type: ignore
 
-REQUIRED_SUPABASE_TABLES = ("users", "projects", "research_plans", "messages", "user_devices")
+REQUIRED_SUPABASE_TABLES = (
+    "users",
+    "projects",
+    "research_plans",
+    "messages",
+    "user_devices",
+    "communication_messages",
+    "communication_events",
+)
 _supabase_ready = False
 logger = logging.getLogger(__name__)
 
@@ -90,6 +100,10 @@ def normalize_thoughts(raw: Union[str, Sequence[AgentThought], Sequence[dict], N
         elif isinstance(item, dict):
             thoughts.append(AgentThought(**item))
     return thoughts or None
+
+
+def compact_dict(data: dict) -> dict:
+    return {key: value for key, value in data.items() if value is not None}
 
 
 def default_plan_items(goal_summary: str) -> list[ResearchPlanItem]:
@@ -224,6 +238,8 @@ class DataStore(Protocol):
     def list_devices(self, user_id: str) -> list[DeviceRecord]: ...
     def revoke_devices(self, user_id: str, scope: str, device_id: Optional[str] = None) -> tuple[int, int]: ...
     def delete_device(self, user_id: str, device_id: str) -> bool: ...
+    def record_communication_message(self, payload: CommunicationMessageIn) -> None: ...
+    def record_communication_event(self, payload: CommunicationEventIn) -> None: ...
 
 class SupabaseStore:
     def __init__(self, client: Client):
@@ -819,6 +835,85 @@ class SupabaseStore:
         except Exception as exc:
             logger.error("Device delete failed", exc_info=exc)
             raise HTTPException(status_code=503, detail="Device delete failed")
+
+    def record_communication_message(self, payload: CommunicationMessageIn) -> None:
+        timestamp = payload.timestamp or now_ms()
+        message_payload = compact_dict(
+            {
+                "request_id": payload.requestId,
+                "provider": payload.provider,
+                "provider_message_id": payload.providerMessageId,
+                "channel": payload.channel,
+                "template": payload.template,
+                "recipient": payload.recipient,
+                "subject": payload.subject,
+                "metadata": payload.metadata,
+                "status": payload.status,
+                "error": payload.error,
+                "created_at": timestamp,
+                "updated_at": timestamp,
+            }
+        )
+        event_payload = compact_dict(
+            {
+                "provider": payload.provider,
+                "message_id": payload.providerMessageId,
+                "request_id": payload.requestId,
+                "status": payload.status,
+                "event_timestamp": timestamp,
+                "payload": compact_dict(
+                    {
+                        "channel": payload.channel,
+                        "template": payload.template,
+                        "recipient": payload.recipient,
+                        "subject": payload.subject,
+                        "metadata": payload.metadata,
+                        "error": payload.error,
+                    }
+                ),
+                "created_at": now_ms(),
+            }
+        )
+        try:
+            self.client.table("communication_messages").upsert(message_payload, on_conflict="request_id").execute()
+            self.client.table("communication_events").insert(event_payload).execute()
+        except Exception as exc:
+            logger.error("Communication message record failed", exc_info=exc)
+            raise HTTPException(status_code=503, detail="Communication message record failed")
+
+    def record_communication_event(self, payload: CommunicationEventIn) -> None:
+        event_payload = compact_dict(
+            {
+                "provider": payload.provider,
+                "message_id": payload.messageId,
+                "request_id": payload.requestId,
+                "status": payload.status,
+                "event_timestamp": payload.timestamp,
+                "payload": payload.payload,
+                "created_at": now_ms(),
+            }
+        )
+        try:
+            self.client.table("communication_events").insert(event_payload).execute()
+            updates = {"status": payload.status, "updated_at": now_ms()}
+            if payload.messageId:
+                (
+                    self.client.table("communication_messages")
+                    .update(updates)
+                    .eq("provider_message_id", payload.messageId)
+                    .execute()
+                )
+            elif payload.requestId:
+                (
+                    self.client.table("communication_messages")
+                    .update(updates)
+                    .eq("request_id", payload.requestId)
+                    .execute()
+                )
+        except Exception as exc:
+            logger.error("Communication event record failed", exc_info=exc)
+            raise HTTPException(status_code=503, detail="Communication event record failed")
+
     def project_stats(self, user_id: str) -> ProjectStats:
         result = (
             self.client.table("projects")

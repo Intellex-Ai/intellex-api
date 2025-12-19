@@ -1,6 +1,6 @@
 # Supabase RLS Edge Cases
 
-Apply `rls_edge_policies.sql` in the Supabase SQL editor (run with the service role key or the dashboard SQL runner so `auth.uid()` is respected). Policies keep `users`, `projects`, `research_plans`, `messages`, and `project_shares` owner-only while still allowing the service role to manage rows.
+RLS policies live in `intellex-infra/supabase/policies/rls_edge_policies.sql`. Apply that file in the Supabase SQL editor (run with the service role key or the dashboard SQL runner so `auth.uid()` is respected). Policies keep `users`, `projects`, `research_plans`, `messages`, and `project_shares` owner-only while still allowing the service role to manage rows.
 
 ## Quick Validation Snippets
 
